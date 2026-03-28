@@ -45,16 +45,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user.id,)).fetchone()[0]
     conn.close()
 
+    # FIX: Used 'callback_data' instead of 'callback_query_data'
     keyboard = [
-        [InlineKeyboardButton("🛒 Buy Account", callback_query_data='buy_acc'),
-         InlineKeyboardButton("💰 Balance", callback_query_data='check_bal')],
-        [InlineKeyboardButton("💳 Recharge", callback_query_data='refill_menu'),
-         InlineKeyboardButton("👥 Refer Friends", callback_query_data='refer')],
-        [InlineKeyboardButton("🎁 Redeem", callback_query_data='redeem'),
+        [InlineKeyboardButton("🛒 Buy Account", callback_data='buy_acc'),
+         InlineKeyboardButton("💰 Balance", callback_data='check_bal')],
+        [InlineKeyboardButton("💳 Recharge", callback_data='refill_menu'),
+         InlineKeyboardButton("👥 Refer Friends", callback_data='refer')],
+        [InlineKeyboardButton("🎁 Redeem", callback_data='redeem'),
          InlineKeyboardButton("🛠️ Support", url='https://t.me/your_support')]
     ]
     if user.id == OWNER_ID:
-        keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_query_data='admin_panel')])
+        keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_data='admin_panel')])
 
     welcome_text = (
         "🥂 **Welcome To OTP Bot By Wanted** 🥂\n\n"
@@ -99,8 +100,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amt = context.user_data.get('temp_amt')
         photo = update.message.photo[-1].file_id
         
-        keyboard = [[InlineKeyboardButton(f"✅ Approve ₹{amt}", callback_query_data=f"adm_pay_{user.id}_{amt}"),
-                     InlineKeyboardButton("❌ Reject", callback_query_data=f"adm_rej_{user.id}")]]
+        # FIX: Used 'callback_data'
+        keyboard = [[InlineKeyboardButton(f"✅ Approve ₹{amt}", callback_data=f"adm_pay_{user.id}_{amt}"),
+                     InlineKeyboardButton("❌ Reject", callback_data=f"adm_rej_{user.id}")]]
         
         await context.bot.send_photo(chat_id=OWNER_ID, photo=photo, 
                                      caption=f"📩 **Deposit Proof**\nUser: {user.first_name}\nID: `{user.id}`\nAmount: ₹{amt}",
@@ -116,10 +118,11 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Total Users: {s['users']}\n• Total Orders: {s['ords']}\n"
             f"• Active Countries: {s['countries']}\n\n⚒ **Management Tools:**")
     
+    # FIX: Used 'callback_data'
     keyboard = [
-        [InlineKeyboardButton("➕ Add Account", callback_query_data='null'), InlineKeyboardButton("📢 Broadcast", callback_query_data='null')],
-        [InlineKeyboardButton("💸 Refund", callback_query_data='null'), InlineKeyboardButton("🚫 Ban User", callback_query_data='null')],
-        [InlineKeyboardButton("⬅️ Back", callback_query_data='start_over')]
+        [InlineKeyboardButton("➕ Add Account", callback_data='null'), InlineKeyboardButton("📢 Broadcast", callback_data='null')],
+        [InlineKeyboardButton("💸 Refund", callback_data='null'), InlineKeyboardButton("🚫 Ban User", callback_data='null')],
+        [InlineKeyboardButton("⬅️ Back", callback_data='start_over')]
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
@@ -142,8 +145,8 @@ async def admin_pay_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- MAIN RUN ---
 def main():
-    if not TOKEN:
-        print("❌ BOT_TOKEN missing in Environment!")
+    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN":
+        logging.error("❌ BOT_TOKEN is missing! Please set it in Heroku Config Vars.")
         return
     
     init_db()
@@ -157,6 +160,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
+    logging.info("🚀 Bot is live and running!")
     app.run_polling()
 
 if __name__ == '__main__':
