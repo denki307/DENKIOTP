@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 # --- LOGGING ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- CONFIGURATION (Heroku Config Vars-la irunthu edukkum) ---
+# --- CONFIGURATION ---
 TOKEN = os.getenv('BOT_TOKEN')
 OWNER_ID = int(os.getenv('OWNER_ID', 0))
 UPI_ID = os.getenv('UPI_ID', 'denkielangokey@fam')
@@ -42,10 +42,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect('otp_store.db')
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user.id, user.username))
-    balance = cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user.id,)).fetchone()[0]
+    balance_row = cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user.id,)).fetchone()
+    balance = balance_row[0] if balance_row else 0.0
     conn.close()
 
-    # FIX: Used 'callback_data' instead of 'callback_query_data'
+    # Buttons (Premium emoji copy-paste panni text-la use pannunga)
     keyboard = [
         [InlineKeyboardButton("🛒 Buy Account", callback_data='buy_acc'),
          InlineKeyboardButton("💰 Balance", callback_data='check_bal')],
@@ -54,24 +55,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎁 Redeem", callback_data='redeem'),
          InlineKeyboardButton("🛠️ Support", url='https://t.me/your_support')]
     ]
+    
     if user.id == OWNER_ID:
         keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_data='admin_panel')])
 
+    # Premium Emoji ID inga use panniruken (HTML tag moolama)
     welcome_text = (
-        "🥂 **Welcome To OTP Bot By Wanted** 🥂\n\n"
-        f"💳 Your Balance: ₹{balance}\n"
+        f"<tg-emoji id='6206210957987810060'>🥂</tg-emoji> <b>Welcome To OTP Bot By Wanted</b> <tg-emoji id='6206210957987810060'>🥂</tg-emoji>\n\n"
+        f"💳 Your Balance: <b>₹{balance}</b>\n"
         "✨ Features:\n• Automatic OTPs 📍\n• Instant Payment Approvals 🧾"
     )
     
     markup = InlineKeyboardMarkup(keyboard)
+    
+    # parse_mode='HTML' dhaan premium emoji-ku mukkiyam
     if update.message:
-        await update.message.reply_text(welcome_text, reply_markup=markup, parse_mode='Markdown')
+        await update.message.reply_text(welcome_text, reply_markup=markup, parse_mode='HTML')
     else:
-        await update.callback_query.edit_message_text(welcome_text, reply_markup=markup, parse_mode='Markdown')
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=markup, parse_mode='HTML')
 
 # --- REFILL FLOW ---
 async def refill_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("💸 **Enter Deposit Amount (₹)**\n\nExample: 500", parse_mode='Markdown')
+    await update.callback_query.message.reply_text("💸 <b>Enter Deposit Amount (₹)</b>\n\nExample: 500", parse_mode='HTML')
     context.user_data['state'] = 'AWAITING_AMOUNT'
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,8 +92,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         qr_path = f"qr_{update.effective_user.id}.png"
         qr.save(qr_path)
         
-        caption = f"✅ **Amount: ₹{amt}**\n📲 Pay to: `{UPI_ID}`\n\n📸 Now send the **payment screenshot**."
-        await update.message.reply_photo(photo=open(qr_path, 'rb'), caption=caption, parse_mode='Markdown')
+        caption = f"✅ <b>Amount: ₹{amt}</b>\n📲 Pay to: <code>{UPI_ID}</code>\n\n📸 Now send the <b>payment screenshot</b>."
+        await update.message.reply_photo(photo=open(qr_path, 'rb'), caption=caption, parse_mode='HTML')
         os.remove(qr_path)
         
         context.user_data['state'] = 'AWAITING_PHOTO'
@@ -100,13 +105,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amt = context.user_data.get('temp_amt')
         photo = update.message.photo[-1].file_id
         
-        # FIX: Used 'callback_data'
         keyboard = [[InlineKeyboardButton(f"✅ Approve ₹{amt}", callback_data=f"adm_pay_{user.id}_{amt}"),
                      InlineKeyboardButton("❌ Reject", callback_data=f"adm_rej_{user.id}")]]
         
         await context.bot.send_photo(chat_id=OWNER_ID, photo=photo, 
-                                     caption=f"📩 **Deposit Proof**\nUser: {user.first_name}\nID: `{user.id}`\nAmount: ₹{amt}",
-                                     reply_markup=InlineKeyboardMarkup(keyboard))
+                                     caption=f"📩 <b>Deposit Proof</b>\nUser: {user.first_name}\nID: <code>{user.id}</code>\nAmount: ₹{amt}",
+                                     reply_markup=InlineKeyboardMarkup(keyboard),
+                                     parse_mode='HTML')
         await update.message.reply_text("⏳ Screenshot sent to Admin! Wait for approval.")
         context.user_data['state'] = None
 
@@ -114,17 +119,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     s = get_stats()
-    text = (f"👑 **Admin Panel**\n\n📊 **Statistics:**\n• Total Accounts: {s['accs']}\n"
+    text = (f"👑 <b>Admin Panel</b>\n\n📊 <b>Statistics:</b>\n• Total Accounts: {s['accs']}\n"
             f"• Total Users: {s['users']}\n• Total Orders: {s['ords']}\n"
-            f"• Active Countries: {s['countries']}\n\n⚒ **Management Tools:**")
+            f"• Active Countries: {s['countries']}\n\n⚒ <b>Management Tools:</b>")
     
-    # FIX: Used 'callback_data'
     keyboard = [
         [InlineKeyboardButton("➕ Add Account", callback_data='null'), InlineKeyboardButton("📢 Broadcast", callback_data='null')],
         [InlineKeyboardButton("💸 Refund", callback_data='null'), InlineKeyboardButton("🚫 Ban User", callback_data='null')],
         [InlineKeyboardButton("⬅️ Back", callback_data='start_over')]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
 # --- ADMIN ACTIONS ---
 async def admin_pay_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,19 +138,20 @@ async def admin_pay_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data[1] == "pay":
         uid, amt = int(data[2]), float(data[3])
         conn = sqlite3.connect('otp_store.db')
-        conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amt, uid))
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amt, uid))
         conn.commit()
         conn.close()
-        await context.bot.send_message(uid, f"✅ **Deposit Approved!** ₹{amt} added.")
+        await context.bot.send_message(uid, f"✅ <b>Deposit Approved!</b> ₹{amt} added.", parse_mode='HTML')
         await query.edit_message_caption("✅ Status: APPROVED")
     else:
-        await context.bot.send_message(int(data[2]), "❌ **Deposit Rejected.**")
+        await context.bot.send_message(int(data[2]), "❌ <b>Deposit Rejected.</b>")
         await query.edit_message_caption("❌ Status: REJECTED")
 
 # --- MAIN RUN ---
 def main():
-    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN":
-        logging.error("❌ BOT_TOKEN is missing! Please set it in Heroku Config Vars.")
+    if not TOKEN:
+        logging.error("❌ BOT_TOKEN missing!")
         return
     
     init_db()
@@ -160,9 +165,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    logging.info("🚀 Bot is live and running!")
+    logging.info("🚀 Bot is live!")
     app.run_polling()
 
 if __name__ == '__main__':
     main()
-
