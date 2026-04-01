@@ -21,7 +21,7 @@ except ImportError:
 # --- CONFIGURATION ---
 BOT_TOKEN = '8498676621:AAGqBQu9ArEJ4v1D4n056uz8er7jHnydqNE'
 ADMIN_ID = 6861240784
-MONGO_URL = 'mongodb+srv://Devilsirophai:db_devilbhaiontop@devil0.d9epxqw.mongodb.net/?appName=Devil0'
+MONGO_URL = 'mongodb+srv://Devilsirophai:devilbhaiontop@devil0.d9epxqw.mongodb.net/?appName=Devil0'
 UPI_ID = "denkielangokey@fam"
 API_ID = 30050679
 API_HASH = '2cb9702785f65b121db14181cb203cf4'
