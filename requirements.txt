@@ -1,4 +1,5 @@
-python-telegram-bot==20.8
-qrcode[pil]==7.4.2
-Pillow==10.2.0
-
+pyTelegramBotAPI==4.26.0
+pymongo[srv]
+pyrogram==2.0.106
+segno==1.6.1
+tgcrypto
