@@ -19,7 +19,7 @@ except ImportError:
     account_manager = None
 
 # --- CONFIGURATION ---
-BOT_TOKEN = '8732475484:AAFiZSDGzA_fbQbArVEmQMaY_UfRWXh53ZU'
+BOT_TOKEN = '8498676621:AAGqBQu9ArEJ4v1D4n056uz8er7jHnydqNE'
 ADMIN_ID = 6861240784
 MONGO_URL = 'mongodb+srv://SMSOPROBOT:denki232007@smsoprobot.qkxfy8h.mongodb.net/?appName=SMSOPROBOT'
 UPI_ID = "denkielangokey@fam"
