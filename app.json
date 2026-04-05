@@ -1,32 +1,44 @@
 {
-  "name": "OTP Store Bot",
-  "description": "Telegram OTP Store Bot with Automatic QR and Admin Panel",
-  "repository": "https://github.com/YOUR_USERNAME/YOUR_REPO_NAME",
-  "logo": "https://telegra.ph/file/your-logo-link.jpg",
-  "keywords": ["telegram", "bot", "otp", "store", "python"],
+  "name": "Telegram Resell Store Bot",
+  "description": "A Telegram Reseller Store Bot built with Python, Pyrogram, and MongoDB.",
+  "keywords": [
+    "telegram",
+    "bot",
+    "store",
+    "pyrogram",
+    "python"
+  ],
   "env": {
+    "API_ID": {
+      "description": "Your Telegram API ID from my.telegram.org",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Your Telegram API HASH from my.telegram.org",
+      "required": true
+    },
     "BOT_TOKEN": {
-      "description": "Enter your Telegram Bot Token from @BotFather",
+      "description": "Your Bot Token from @BotFather",
       "required": true
     },
-    "OWNER_ID": {
-      "description": "Enter your Telegram User ID (e.g. 123456789)",
+    "ADMIN_ID": {
+      "description": "Your Telegram User ID",
       "required": true
     },
-    "UPI_ID": {
-      "description": "Enter your UPI ID for QR generation (e.g. name@upi)",
-      "required": true,
-      "value": "shubhamarya55555@fam"
+    "MONGO_URL": {
+      "description": "Your MongoDB Atlas Connection String",
+      "required": true
     }
   },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
   "formation": {
     "worker": {
       "quantity": 1,
-      "size": "basic"
+      "size": ""
     }
-  },
-  "addons": [
-    "heroku-postgresql:essential-0"
-  ]
+  }
 }
-
