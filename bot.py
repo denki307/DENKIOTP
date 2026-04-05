@@ -3,7 +3,6 @@ import qrcode
 import io
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pyrogram.enums import ButtonStyle
 import database as db  # Database file-a link pandrom
 
 # ==========================================
