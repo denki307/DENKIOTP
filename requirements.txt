@@ -1,5 +1,6 @@
-pyTelegramBotAPI==4.26.0
-pymongo[srv]
-pyrogram==2.0.106
-segno==1.6.1
+pyrogram
 tgcrypto
+qrcode
+pillow
+pymongo
+dnspython
