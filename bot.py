@@ -1,21 +1,22 @@
+import os
 import qrcode
 import io
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.enums import ButtonStyle
 import database as db  # Database file-a link pandrom
 
 # ==========================================
-# ⚙️ CONFIGURATION
+# ⚙️ CONFIGURATION (Heroku-ku etha mathiri)
 # ==========================================
-API_ID = "YOUR_API_ID" 
-API_HASH = "YOUR_API_HASH" 
-BOT_TOKEN = "YOUR_BOT_TOKEN" 
-ADMIN_ID = 1234567890 # UNGA TELEGRAM USER ID
+# Heroku config vars-la irunthu automatic ah edukkum
+API_ID = int(os.environ.get("API_ID", 1234567)) 
+API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH") 
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN") 
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 1234567890)) 
+
 UPI_ID = "your_upi_id@ybl"
 UPI_NAME = "Your Name"
-
-# Start message la varavendiya photo URL (Telegraph link or Image URL)
-START_PIC_URL = "https://telegra.ph/file/your_image_link.jpg" 
 
 app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -39,7 +40,7 @@ async def start_menu(client, message):
         
     welcome_text = (
         "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
-        "[ #DESTROYERS ]! (Resell Center)\n\n"
+        "[ DESTROYERS ]! (Resell Center)\n\n"
         f"💳 Your Balance: ₹{balance}\n"
         "🏷 Bot Status: ✅ Wholesale Enabled"
     )
@@ -53,7 +54,8 @@ async def start_menu(client, message):
          InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
     ])
     
-    await message.reply_photo(photo=START_PIC_URL, caption=welcome_text, reply_markup=keyboard)
+    # Image illama verum text mattum send aagum
+    await message.reply_text(text=welcome_text, reply_markup=keyboard)
 
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
@@ -152,23 +154,27 @@ async def button_handler(client, call: CallbackQuery):
     
     if data == "back_to_main":
         balance = db.get_balance(user_id)
-        welcome_text = f"💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n[ #DESTROYERS ]! (Resell Center)\n\n💳 Your Balance: ₹{balance}\n🏷 Bot Status: ✅ Wholesale Enabled"
+        welcome_text = (
+            "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
+            "[ DESTROYERS ]! (Resell Center)\n\n"
+            f"💳 Your Balance: ₹{balance}\n"
+            "🏷 Bot Status: ✅ Wholesale Enabled"
+        )
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔥 Buy Accounts", callback_data="buy_accounts")],
             [InlineKeyboardButton("💰 Refill Wallet", callback_data="refill_wallet"), InlineKeyboardButton("💳 Balance", callback_data="check_balance")],
             [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
             [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
         ])
-        # Removing old photo message and sending new one to avoid edit_media issues
-        await call.message.delete()
-        await client.send_photo(chat_id=user_id, photo=START_PIC_URL, caption=welcome_text, reply_markup=keyboard)
+        # Text-a mattum edit pandrom (Image illatha naala edit_text use pandrom)
+        await call.message.edit_text(text=welcome_text, reply_markup=keyboard)
 
     elif data == "check_balance":
         await call.answer(f"💳 Your balance is: ₹{db.get_balance(user_id)}", show_alert=True)
 
     elif data == "refill_wallet":
         user_steps[user_id] = "ENTER_AMOUNT"
-        await call.message.reply_text(
+        await call.message.edit_text(
             "💰 Enter the amount to deposit:",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]])
         )
@@ -183,7 +189,7 @@ async def button_handler(client, call: CallbackQuery):
             if stock > 0:
                 buttons.append([InlineKeyboardButton(f"{c} - ₹{price} (Stock: {stock})", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.reply_text("🛒 **Choose a Country:**", reply_markup=InlineKeyboardMarkup(buttons))
+        await call.message.edit_text("🛒 **Choose a Country:**", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("view_"):
         country = data.split("_")[1]
@@ -239,7 +245,7 @@ async def button_handler(client, call: CallbackQuery):
 
     elif data == "admin_add_acc" and user_id == ADMIN_ID:
         admin_steps[user_id] = "WAIT_COUNTRY"
-        await call.message.reply_text("🌍 Enter Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
+        await call.message.edit_text("🌍 Enter Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
     elif data == "admin_view_stock" and user_id == ADMIN_ID:
         countries = db.get_all_countries()
