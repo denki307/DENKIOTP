@@ -1,197 +1,253 @@
-import logging
-import re
-import threading
-import time
+import qrcode
 import io
-import segno
-from datetime import datetime
-from bson import ObjectId
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pymongo import MongoClient
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+import database as db  # Database file-a link pandrom
 
-# --- ACCOUNT MANAGER IMPORT ---
-try:
-    from account import AccountManager
-    account_manager = AccountManager(api_id=30050679, api_hash='2cb9702785f65b121db14181cb203cf4')
-except ImportError:
-    print("❌ Error: 'account.py' file-a same folder-la vaiyunga!")
-    account_manager = None
+# ==========================================
+# ⚙️ CONFIGURATION
+# ==========================================
+API_ID = "YOUR_API_ID" 
+API_HASH = "YOUR_API_HASH" 
+BOT_TOKEN = "YOUR_BOT_TOKEN" 
+ADMIN_ID = 1234567890 # UNGA TELEGRAM USER ID
+UPI_ID = "your_upi_id@ybl"
+UPI_NAME = "Your Name"
 
-# --- CONFIGURATION ---
-BOT_TOKEN = '8498676621:AAGqBQu9ArEJ4v1D4n056uz8er7jHnydqNE'
-ADMIN_ID = 6861240784
-MONGO_URL = 'mongodb+srv://Devilsirophai:devilbhaiontop@devil0.d9epxqw.mongodb.net/?appName=Devil0'
-UPI_ID = "denkielangokey@fam"
-API_ID = 30050679
-API_HASH = '2cb9702785f65b121db14181cb203cf4'
+# Start message la varavendiya photo URL (Telegraph link or Image URL)
+START_PIC_URL = "https://telegra.ph/file/your_image_link.jpg" 
 
-# --- DATABASE INIT ---
-client = MongoClient(MONGO_URL)
-db = client['otp_bot']
-users_col, wallets_col, countries_col = db['users'], db['wallets'], db['countries']
-accounts_col, recharges_col = db['accounts'], db['recharges']
+app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-bot = telebot.TeleBot(BOT_TOKEN)
-login_states = {} 
+# Temporary Memory (Current steps mattum track panna)
+user_steps = {} 
+pending_payments = {} 
+admin_steps = {} 
+temp_data = {} 
 
-# --- UTILS ---
-def get_balance(user_id):
-    rec = wallets_col.find_one({"user_id": user_id})
-    return float(rec.get("balance", 0.0)) if rec else 0.0
+# Default Prices
+country_prices = {"India": 36, "USA": 35, "Vietnam": 30} 
 
-def format_currency(x):
-    return f"₹{float(x):.2f}"
+# ==========================================
+# 🟢 START MENU & ADMIN PANEL
+# ==========================================
 
-# 1. START MENU
-@bot.message_handler(commands=['start'])
-def start(msg):
-    user_id = msg.from_user.id
-    if not users_col.find_one({"user_id": user_id}):
-        users_col.insert_one({"user_id": user_id, "name": msg.from_user.first_name})
-        wallets_col.update_one({"user_id": user_id}, {"$setOnInsert": {"balance": 0.0}}, upsert=True)
-    
-    balance = get_balance(user_id)
-    caption = f"""💪 **Welcome ═🏹×<u>WANTED</u>™ ٭-🏹═👑⌜ Op ⌟ [#DESTROYERS]! (Resell Center)**\n\n💳 **Your Balance:** {format_currency(balance)}\n🏷️ **Bot Status:** ✅ Wholesale Enabled"""
-
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("🔥 Buy Accounts", callback_data="buy_account"))
-    markup.row(InlineKeyboardButton("💰 Refill Wallet", callback_data="recharge"), InlineKeyboardButton("💳 Balance", callback_data="balance"))
-    markup.row(InlineKeyboardButton("📋 My Orders", callback_data="my_orders"))
-    markup.row(InlineKeyboardButton("💬 Support ↗️", url="https://t.me/DevilComingSoon"))
-    if user_id == ADMIN_ID: markup.row(InlineKeyboardButton("👑 Admin Panel", callback_data="admin_panel"))
-
-    bot.send_photo(msg.chat.id, "https://graph.org/file/cd2c651b9329efacea55b-6b9934c74f4f28902a.jpg", caption=caption, parse_mode="HTML", reply_markup=markup)
-
-# 2. BUY CATEGORY
-@bot.callback_query_handler(func=lambda call: call.data == "buy_account")
-def buy_categories(call):
-    text = "📱 **TG Accounts**\n\n1️⃣ **Cheap Acc**\n2️⃣ **Good Quality Acc**\n\n⚠️ **NO REFUNDS.**"
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("🎣 Cheap Acc", callback_data="view_cheap"))
-    markup.row(InlineKeyboardButton("🌟 Good Quality Acc", callback_data="view_good"))
-    markup.row(InlineKeyboardButton("🔙 Back", callback_data="back_to_menu"))
-    bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
-
-# 3. PRICE LIST
-@bot.callback_query_handler(func=lambda call: call.data == "view_cheap")
-def cheap_list(call):
-    country = countries_col.find_one({"name": {"$regex": "India", "$options": "i"}})
-    price = country['price'] if country else 36.0
-    text = "📱 **TG Accounts — Cheap | IN**\n\nShowing 6 accounts. Tap to buy 👇"
-    markup = InlineKeyboardMarkup()
-    for i in range(6):
-        markup.row(InlineKeyboardButton(f"🇮🇳 {format_currency(price)} IN", callback_data=f"purchase_India_{i}"))
-    markup.row(InlineKeyboardButton("Next ➡️", callback_data="next_page"), InlineKeyboardButton("🔙 Menu", callback_data="back_to_menu"))
-    bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
-
-# 4. BALANCE DEDUCTION & DEVICES BUTTON
-@bot.callback_query_handler(func=lambda call: call.data.startswith("purchase_"))
-def process_purchase(call):
-    user_id = call.from_user.id
-    country_name = call.data.split("_")[1]
-    country = countries_col.find_one({"name": {"$regex": country_name, "$options": "i"}})
-    price = country['price'] if country else 36.0
-    
-    if get_balance(user_id) < price:
-        bot.answer_callback_query(call.id, f"❌ No Balance! Need {format_currency(price)}", show_alert=True)
-        return
-
-    acc = accounts_col.find_one({"country": {"$regex": country_name, "$options": "i"}, "used": False})
-    if not acc:
-        bot.answer_callback_query(call.id, "❌ Out of Stock!", show_alert=True)
-        return
-
-    wallets_col.update_one({"user_id": user_id}, {"$inc": {"balance": -float(price)}})
-    accounts_col.update_one({"_id": acc['_id']}, {"$set": {"used": True, "buyer": user_id}})
-    
-    # Successful Purchase Markup
-    markup = InlineKeyboardMarkup()
-    markup.add(
-        InlineKeyboardButton("🔢 Get OTP", callback_data=f"get_otp_{acc['_id']}"),
-        InlineKeyboardButton("📱 Devices", callback_data=f"view_devices_{acc['_id']}")
+@app.on_message(filters.command("start") & filters.private)
+async def start_menu(client, message):
+    user_id = message.from_user.id
+    balance = db.get_balance(user_id)
+        
+    welcome_text = (
+        "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
+        "[ #DESTROYERS ]! (Resell Center)\n\n"
+        f"💳 Your Balance: ₹{balance}\n"
+        "🏷 Bot Status: ✅ Wholesale Enabled"
     )
     
-    bot.answer_callback_query(call.id, "✅ Amount Deducted!", show_alert=False)
-    bot.send_message(user_id, f"✅ **Purchase Successful!**\n🌍 Country: {country_name}\n📱 Number: `{acc['phone']}`\n\nManage your session below:", reply_markup=markup)
-
-# 5. DEVICE CHECKER & LOGOUT LOGIC
-@bot.callback_query_handler(func=lambda call: call.data.startswith("view_devices_"))
-def show_devices_list(call):
-    acc_id = call.data.split("_")[2]
-    acc = accounts_col.find_one({"_id": ObjectId(acc_id)})
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔥 Buy Accounts", callback_data="buy_accounts")],
+        [InlineKeyboardButton("💰 Refill Wallet", callback_data="refill_wallet"), 
+         InlineKeyboardButton("💳 Balance", callback_data="check_balance")],
+        [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
+        [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), 
+         InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
+    ])
     
-    if not acc or 'session_string' not in acc:
-        bot.answer_callback_query(call.id, "❌ Session error!", show_alert=True)
+    await message.reply_photo(photo=START_PIC_URL, caption=welcome_text, reply_markup=keyboard)
+
+@app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
+async def admin_panel(client, message):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Account", callback_data="admin_add_acc")],
+        [InlineKeyboardButton("📊 View Stock", callback_data="admin_view_stock")]
+    ])
+    await message.reply_text("👑 **Admin Panel**\n\nWhat do you want to do?", reply_markup=keyboard)
+
+# ==========================================
+# 📝 MESSAGE HANDLER (Inputs)
+# ==========================================
+
+@app.on_message(filters.text & filters.private)
+async def handle_text(client, message):
+    user_id = message.from_user.id
+    text = message.text
+
+    # --- REFILL AMOUNT INPUT ---
+    if user_steps.get(user_id) == "ENTER_AMOUNT":
+        if not text.isdigit() or int(text) <= 0:
+            await message.reply_text("❌ Invalid amount. Enter a valid number.")
+            return
+            
+        amount = int(text)
+        pending_payments[user_id] = amount
+        user_steps[user_id] = "WAITING_FOR_SCREENSHOT"
+        
+        upi_url = f"upi://pay?pa={UPI_ID}&pn={UPI_NAME}&am={amount}&cu=INR"
+        qr_img = qrcode.make(upi_url)
+        bio = io.BytesIO()
+        bio.name = 'qr.png'
+        qr_img.save(bio, 'PNG')
+        bio.seek(0)
+        
+        await message.reply_photo(
+            photo=bio,
+            caption=f"✅ QR Code generated for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Pay exactly ₹{amount} and send the **Payment Screenshot** here."
+        )
         return
 
-    bot.answer_callback_query(call.id, "🔍 Fetching active sessions...", show_alert=False)
-    
-    # account_manager kulla irukura get_active_devices use panrom
-    try:
-        from pyrogram import Client
-        temp_client = Client("device_check", session_string=acc['session_string'], api_id=API_ID, api_hash=API_HASH, in_memory=True)
-        
-        def get_sessions_sync():
-            with temp_client:
-                return list(temp_client.get_sessions())
-        
-        sessions = get_sessions_sync()
-        text = "📱 **Active Devices on this Account:**\n\n"
-        markup = InlineKeyboardMarkup()
-
-        for s in sessions:
-            dtype = "🤖 **Bot Device (Current)**" if s.is_current else "📱 **Mobile/Other Device**"
-            text += f"{dtype}\nModel: {s.device_model}\nSystem: {s.system_version}\n\n"
+    # --- ADMIN ADD ACCOUNT INPUTS ---
+    if user_id == ADMIN_ID:
+        step = admin_steps.get(user_id)
+        if step == "WAIT_COUNTRY":
+            temp_data[user_id] = {"country": text}
+            admin_steps[user_id] = "WAIT_NUMBER"
+            await message.reply_text(f"✅ Country: {text}\n\n📞 Enter Phone Number:")
+        elif step == "WAIT_NUMBER":
+            temp_data[user_id]["number"] = text
+            admin_steps[user_id] = "WAIT_OTP"
+            await message.reply_text("🔢 Enter OTP:")
+        elif step == "WAIT_OTP":
+            temp_data[user_id]["otp"] = text
+            admin_steps[user_id] = "WAIT_PASS"
+            await message.reply_text("🔐 Enter Password (or 'None'):")
+        elif step == "WAIT_PASS":
+            temp_data[user_id]["pass"] = text
+            country = temp_data[user_id]["country"]
+            acc_info = f"{temp_data[user_id]['number']}|{temp_data[user_id]['otp']}|{temp_data[user_id]['pass']}"
             
-            if s.is_current:
-                markup.row(InlineKeyboardButton("🚫 Logout Bot Session", callback_data=f"force_logout_{acc_id}"))
-        
-        markup.row(InlineKeyboardButton("🔙 Back", callback_data="back_to_menu"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
-        
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ Session Expired or Error: {str(e)}")
+            db.add_account(country, acc_info) # Saving to MongoDB
+            admin_steps[user_id] = None
+            await message.reply_text(f"🚀 **Success!** Account added to {country}.\nTotal Stock: {db.get_stock_count(country)}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("force_logout_"))
-def force_logout_session(call):
-    acc_id = call.data.split("_")[2]
-    acc = accounts_col.find_one({"_id": ObjectId(acc_id)})
+# ==========================================
+# 📸 PHOTO HANDLER (Screenshots)
+# ==========================================
+
+@app.on_message(filters.photo & filters.private)
+async def handle_screenshot(client, message):
+    user_id = message.from_user.id
+    if user_steps.get(user_id) == "WAITING_FOR_SCREENSHOT":
+        amount = pending_payments.get(user_id, 0)
+        admin_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Approve", callback_data=f"approve_{user_id}"),
+             InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user_id}")]
+        ])
+        await client.send_photo(
+            chat_id=ADMIN_ID,
+            photo=message.photo.file_id,
+            caption=f"🔔 **New Deposit Request**\n\n👤 User ID: `{user_id}`\n💰 Amount: ₹{amount}",
+            reply_markup=admin_keyboard
+        )
+        await message.reply_text("⏳ Screenshot sent to admin. Please wait for approval.")
+        user_steps[user_id] = None
+
+# ==========================================
+# 🔘 CALLBACK HANDLER (Buttons)
+# ==========================================
+
+@app.on_callback_query()
+async def button_handler(client, call: CallbackQuery):
+    data = call.data
+    user_id = call.from_user.id
     
-    if account_manager:
-        success, msg = account_manager.logout_session_sync(acc_id, call.from_user.id, db['otp_sessions'], accounts_col, db['orders'])
-        if success:
-            bot.edit_message_text("✅ **Bot Device Logged Out Successfully!**\n\nString session invalid aagiduchi. Safe login guarantee.", call.message.chat.id, call.message.message_id)
+    if data == "back_to_main":
+        balance = db.get_balance(user_id)
+        welcome_text = f"💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n[ #DESTROYERS ]! (Resell Center)\n\n💳 Your Balance: ₹{balance}\n🏷 Bot Status: ✅ Wholesale Enabled"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔥 Buy Accounts", callback_data="buy_accounts")],
+            [InlineKeyboardButton("💰 Refill Wallet", callback_data="refill_wallet"), InlineKeyboardButton("💳 Balance", callback_data="check_balance")],
+            [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
+            [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
+        ])
+        # Removing old photo message and sending new one to avoid edit_media issues
+        await call.message.delete()
+        await client.send_photo(chat_id=user_id, photo=START_PIC_URL, caption=welcome_text, reply_markup=keyboard)
+
+    elif data == "check_balance":
+        await call.answer(f"💳 Your balance is: ₹{db.get_balance(user_id)}", show_alert=True)
+
+    elif data == "refill_wallet":
+        user_steps[user_id] = "ENTER_AMOUNT"
+        await call.message.reply_text(
+            "💰 Enter the amount to deposit:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]])
+        )
+
+    # --- BUY SYSTEM ---
+    elif data == "buy_accounts":
+        buttons = []
+        countries = db.get_all_countries()
+        for c in countries:
+            stock = db.get_stock_count(c)
+            price = country_prices.get(c, 30)
+            if stock > 0:
+                buttons.append([InlineKeyboardButton(f"{c} - ₹{price} (Stock: {stock})", callback_data=f"view_{c}")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
+        await call.message.reply_text("🛒 **Choose a Country:**", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif data.startswith("view_"):
+        country = data.split("_")[1]
+        stock = db.get_stock_count(country)
+        price = country_prices.get(country, 30)
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")],
+            [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]
+        ])
+        await call.message.edit_text(f"🌍 **{country} Accounts**\n\n📦 Stock: {stock}\n💵 Price: ₹{price}", reply_markup=keyboard)
+
+    elif data.startswith("buy_confirm_"):
+        country = data.split("_")[2]
+        price = country_prices.get(country, 30)
+        current_bal = db.get_balance(user_id)
+        
+        if db.get_stock_count(country) == 0:
+            await call.answer("❌ Out of stock.", show_alert=True)
+            return
+        if current_bal < price:
+            await call.answer(f"❌ Low Balance! Need ₹{price}.", show_alert=True)
+            return
+            
+        db.update_balance(user_id, -price)
+        acc_details = db.get_and_remove_account(country)
+        
+        await call.message.edit_text(
+            f"✅ **Purchase Successful!**\n\n🌍 {country}\n💰 Paid: ₹{price}\n💳 Balance: ₹{db.get_balance(user_id)}\n\n📦 **Account Details:**\n`{acc_details}`\n\n⚠️ No refunds!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]])
+        )
+
+    # --- ADMIN APPROVAL ---
+    elif data.startswith("approve_") or data.startswith("reject_"):
+        if user_id != ADMIN_ID:
+            await call.answer("❌ You are not Admin!", show_alert=True)
+            return
+            
+        action, target_user = data.split("_")
+        target_user = int(target_user)
+        amount = pending_payments.get(target_user, 0)
+        
+        if action == "approve":
+            db.update_balance(target_user, amount)
+            await call.message.edit_caption(f"{call.message.caption}\n\n**Status: ✅ APPROVED**")
+            await client.send_message(target_user, f"✅ **Deposit Approved!** ₹{amount} added.")
         else:
-            bot.answer_callback_query(call.id, f"❌ {msg}", show_alert=True)
+            await call.message.edit_caption(f"{call.message.caption}\n\n**Status: ❌ REJECTED**")
+            await client.send_message(target_user, f"❌ **Deposit Rejected!**")
+            
+        if target_user in pending_payments:
+            del pending_payments[target_user]
 
-# 6. ADMIN & RECHARGE (Existing)
-@bot.callback_query_handler(func=lambda call: call.data == "admin_panel")
-def admin_panel(call):
-    if call.from_user.id != ADMIN_ID: return
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(InlineKeyboardButton("🌍 Add Country", callback_data="adm_add_ctry"), InlineKeyboardButton("📱 Add Account", callback_data="adm_add_acc"))
-    bot.send_message(ADMIN_ID, "👑 **Admin Panel**", reply_markup=markup)
+    elif data == "admin_add_acc" and user_id == ADMIN_ID:
+        admin_steps[user_id] = "WAIT_COUNTRY"
+        await call.message.reply_text("🌍 Enter Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
-@bot.callback_query_handler(func=lambda call: call.data == "recharge")
-def recharge(call):
-    msg = bot.send_message(call.message.chat.id, "💳 **Enter amount:**")
-    bot.register_next_step_handler(msg, gen_qr_code)
-
-def gen_qr_code(msg):
-    try:
-        amt = float(msg.text)
-        url = f"upi://pay?pa={UPI_ID}&pn=WANTED&am={amt}&cu=INR"
-        qr = segno.make(url)
-        buf = io.BytesIO(); qr.save(buf, kind='png', scale=10); buf.seek(0)
-        bot.send_photo(msg.chat.id, buf, caption=f"Pay ₹{amt}", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("💰 Deposited ✅", callback_data=f"dep_{amt}")))
-    except: bot.send_message(msg.chat.id, "❌ Error.")
-
-@bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
-def back(call):
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    start(call)
+    elif data == "admin_view_stock" and user_id == ADMIN_ID:
+        countries = db.get_all_countries()
+        text = "📊 **Current Stock:**\n\n"
+        for c in countries:
+            text += f"- {c}: {db.get_stock_count(c)} accounts\n"
+        await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Close", callback_data="back_to_main")]]))
 
 if __name__ == "__main__":
-    bot.infinity_polling()
-
+    print("🚀 Bot is starting...")
+    app.run()
