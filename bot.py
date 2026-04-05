@@ -14,8 +14,8 @@ API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN") 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 1234567890)) 
 
-UPI_ID = "your_upi_id@ybl"
-UPI_NAME = "Your Name"
+UPI_ID = "denkielangokey@fam"
+UPI_NAME = "DENKI"
 
 app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -24,9 +24,6 @@ user_steps = {}
 pending_payments = {} 
 admin_steps = {} 
 temp_data = {} 
-
-# Default Prices
-country_prices = {"India": 36, "USA": 35, "Vietnam": 30} 
 
 # ==========================================
 # 🟢 START MENU & ADMIN PANEL
@@ -60,7 +57,8 @@ async def start_menu(client, message):
 async def admin_panel(client, message):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Account", callback_data="admin_add_acc")],
-        [InlineKeyboardButton("📊 View Stock", callback_data="admin_view_stock")]
+        [InlineKeyboardButton("📊 View Stock", callback_data="admin_view_stock")],
+        [InlineKeyboardButton("💰 Edit Price", callback_data="admin_edit_price")] # Puthiya Edit Price button
     ])
     await message.reply_text("👑 **Admin Panel**\n\nWhat do you want to do?", reply_markup=keyboard)
 
@@ -96,9 +94,11 @@ async def handle_text(client, message):
         )
         return
 
-    # --- ADMIN ADD ACCOUNT INPUTS ---
+    # --- ADMIN ADD ACCOUNT & EDIT PRICE INPUTS ---
     if user_id == ADMIN_ID:
         step = admin_steps.get(user_id)
+        
+        # Add Account Flow
         if step == "WAIT_COUNTRY":
             temp_data[user_id] = {"country": text}
             admin_steps[user_id] = "WAIT_NUMBER"
@@ -119,6 +119,21 @@ async def handle_text(client, message):
             db.add_account(country, acc_info) # Saving to MongoDB
             admin_steps[user_id] = None
             await message.reply_text(f"🚀 **Success!** Account added to {country}.\nTotal Stock: {db.get_stock_count(country)}")
+            
+        # Edit Price Flow
+        elif step == "EDIT_PRICE_COUNTRY":
+            temp_data[user_id] = {"edit_country": text}
+            admin_steps[user_id] = "EDIT_PRICE_AMOUNT"
+            await message.reply_text(f"✅ Country selected: {text}\n\n💰 Enter new price for {text} (e.g., 40):")
+        elif step == "EDIT_PRICE_AMOUNT":
+            if not text.isdigit():
+                await message.reply_text("❌ Please enter a valid number.")
+                return
+            new_price = int(text)
+            country = temp_data[user_id]["edit_country"]
+            db.set_price(country, new_price) # Saving new price to MongoDB
+            admin_steps[user_id] = None
+            await message.reply_text(f"✅ Success! **{country}** price changed to **₹{new_price}**.")
 
 # ==========================================
 # 📸 PHOTO HANDLER (Screenshots)
@@ -165,7 +180,6 @@ async def button_handler(client, call: CallbackQuery):
             [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
             [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
         ])
-        # Text-a mattum edit pandrom (Image illatha naala edit_text use pandrom)
         await call.message.edit_text(text=welcome_text, reply_markup=keyboard)
 
     elif data == "check_balance":
@@ -184,7 +198,7 @@ async def button_handler(client, call: CallbackQuery):
         countries = db.get_all_countries()
         for c in countries:
             stock = db.get_stock_count(c)
-            price = country_prices.get(c, 30)
+            price = db.get_price(c) # Database la irunthu price edukkuthu
             if stock > 0:
                 buttons.append([InlineKeyboardButton(f"{c} - ₹{price} (Stock: {stock})", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
@@ -193,7 +207,7 @@ async def button_handler(client, call: CallbackQuery):
     elif data.startswith("view_"):
         country = data.split("_")[1]
         stock = db.get_stock_count(country)
-        price = country_prices.get(country, 30)
+        price = db.get_price(country) # Database la irunthu price edukkuthu
         
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")],
@@ -203,7 +217,7 @@ async def button_handler(client, call: CallbackQuery):
 
     elif data.startswith("buy_confirm_"):
         country = data.split("_")[2]
-        price = country_prices.get(country, 30)
+        price = db.get_price(country) # Database la irunthu price edukkuthu
         current_bal = db.get_balance(user_id)
         
         if db.get_stock_count(country) == 0:
@@ -242,17 +256,23 @@ async def button_handler(client, call: CallbackQuery):
         if target_user in pending_payments:
             del pending_payments[target_user]
 
+    # --- ADMIN SETTINGS MENU ---
     elif data == "admin_add_acc" and user_id == ADMIN_ID:
         admin_steps[user_id] = "WAIT_COUNTRY"
         await call.message.edit_text("🌍 Enter Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
+
+    elif data == "admin_edit_price" and user_id == ADMIN_ID:
+        admin_steps[user_id] = "EDIT_PRICE_COUNTRY"
+        await call.message.edit_text("💰 Which country's price do you want to edit? (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
     elif data == "admin_view_stock" and user_id == ADMIN_ID:
         countries = db.get_all_countries()
         text = "📊 **Current Stock:**\n\n"
         for c in countries:
-            text += f"- {c}: {db.get_stock_count(c)} accounts\n"
+            text += f"- {c}: {db.get_stock_count(c)} accounts (₹{db.get_price(c)})\n"
         await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Close", callback_data="back_to_main")]]))
 
 if __name__ == "__main__":
     print("🚀 Bot is starting...")
     app.run()
+
