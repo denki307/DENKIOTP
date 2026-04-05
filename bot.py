@@ -20,11 +20,7 @@ user_steps = {}
 pending_payments = {} 
 admin_steps = {} 
 temp_data = {} 
-active_orders = {} # Auto OTP session save pandrathuku
-
-# ==========================================
-# 🟢 START MENU & ADMIN PANEL
-# ==========================================
+active_orders = {} 
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_menu(client, message):
@@ -55,18 +51,13 @@ async def admin_panel(client, message):
         [InlineKeyboardButton("📊 Manage Stock", callback_data="admin_view_stock")],
         [InlineKeyboardButton("💰 Edit Price", callback_data="admin_edit_price")]
     ])
-    await message.reply_text("👑 **Admin Panel**\n\nWhat do you want to do?", reply_markup=keyboard)
-
-# ==========================================
-# 📝 MESSAGE HANDLER (Inputs)
-# ==========================================
+    await message.reply_text("👑 Admin Panel\n\nWhat do you want to do?", reply_markup=keyboard)
 
 @app.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
     text = message.text
 
-    # --- REFILL ---
     if user_steps.get(user_id) == "ENTER_AMOUNT":
         if not text.isdigit() or int(text) <= 0:
             return await message.reply_text("❌ Invalid amount.")
@@ -84,7 +75,6 @@ async def handle_text(client, message):
         await message.reply_photo(photo=bio, caption=f"✅ QR Code for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Send Screenshot here.")
         return
 
-    # --- ADMIN ADD SESSION FLOW (Auto Login) ---
     if user_id == ADMIN_ID:
         step = admin_steps.get(user_id)
         
@@ -98,7 +88,6 @@ async def handle_text(client, message):
             temp_data[user_id]["phone"] = phone
             await message.reply_text("⏳ Generating Session... Please wait.")
             
-            # Temporary Client
             temp_client = Client(f"temp_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
             await temp_client.connect()
             try:
@@ -123,7 +112,7 @@ async def handle_text(client, message):
                 await temp_client.sign_in(phone, phone_code_hash, otp)
                 session_string = await temp_client.export_session_string()
                 db.add_account(country, phone, session_string)
-                await message.reply_text(f"🚀 **Success!** Active Session added to {country} stock.\nTotal Stock: {db.get_stock_count(country)}")
+                await message.reply_text(f"🚀 Success! Active Session added to {country} stock.\nTotal Stock: {db.get_stock_count(country)}")
             except Exception as e:
                 await message.reply_text(f"❌ Login Failed: {e}. Check if 2FA is enabled or OTP is wrong.")
             finally:
@@ -141,9 +130,6 @@ async def handle_text(client, message):
             admin_steps[user_id] = None
             await message.reply_text(f"✅ Price changed to ₹{text}.")
 
-# ==========================================
-# 📸 PHOTO HANDLER (Screenshots)
-# ==========================================
 @app.on_message(filters.photo & filters.private)
 async def handle_screenshot(client, message):
     user_id = message.from_user.id
@@ -154,9 +140,6 @@ async def handle_screenshot(client, message):
         await message.reply_text("⏳ Screenshot sent to admin.")
         user_steps[user_id] = None
 
-# ==========================================
-# 🔘 CALLBACK HANDLER (Buttons)
-# ==========================================
 @app.on_callback_query()
 async def button_handler(client, call: CallbackQuery):
     data = call.data
@@ -185,7 +168,6 @@ async def button_handler(client, call: CallbackQuery):
         user_steps[user_id] = "ENTER_AMOUNT"
         await call.message.edit_text("💰 Enter the amount to deposit:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
 
-    # --- BUY SYSTEM (Auto OTP Flow) ---
     elif data == "buy_accounts":
         buttons = []
         for c in db.get_all_countries():
@@ -193,12 +175,12 @@ async def button_handler(client, call: CallbackQuery):
             if stock > 0:
                 buttons.append([InlineKeyboardButton(f"{c} - ₹{db.get_price(c)} (Stock: {stock})", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.edit_text("🛒 **Choose a Country:**", reply_markup=InlineKeyboardMarkup(buttons))
+        await call.message.edit_text("🛒 Choose a Country:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("view_"):
         country = data.split("_")[1]
         price = db.get_price(country)
-        await call.message.edit_text(f"🌍 **{country} Accounts**\n\n📦 Stock: {db.get_stock_count(country)}\n💵 Price: ₹{price}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
+        await call.message.edit_text(f"🌍 {country} Accounts\n\n📦 Stock: {db.get_stock_count(country)}\n💵 Price: ₹{price}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
     elif data.startswith("buy_confirm_"):
         country = data.split("_")[2]
@@ -213,23 +195,37 @@ async def button_handler(client, call: CallbackQuery):
         acc_data = db.get_and_remove_account(country)
         db.update_balance(user_id, -price)
         
-        # Save session to memory for OTP
-        active_orders[user_id] = acc_data 
+        phone_num = acc_data.get("phone")
+        is_old_account = False
         
-        text = (
-            f"✅ **Purchase Successful!**\n\n"
-            f"📱 **Number:** `{acc_data['phone']}`\n\n"
-            f"👉 Enter this number in your Telegram App.\n"
-            f"👉 Then click **'📩 Get OTP'** below."
-        )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📩 Get OTP", callback_data="get_otp")],
-            [InlineKeyboardButton("🔄 Retry (Send again)", callback_data="retry_otp")],
-            [InlineKeyboardButton("📱 Device -> Logout Bot", callback_data="logout_bot")]
-        ])
+        if not phone_num:
+            details = acc_data.get("details", "")
+            phone_num = details.split("|")[0] if "|" in details else "Manual Account"
+            is_old_account = True
+
+        if is_old_account:
+            text = (
+                f"✅ Purchase Successful!\n\n"
+                f"📱 Account Details:\n`{acc_data.get('details')}`\n\n"
+                f"⚠️ This is an old manual account. No Auto OTP available."
+            )
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]])
+        else:
+            active_orders[user_id] = acc_data 
+            text = (
+                f"✅ Purchase Successful!\n\n"
+                f"📱 Number: `{phone_num}`\n\n"
+                f"👉 Enter this number in your Telegram App.\n"
+                f"👉 Then click '📩 Get OTP' below."
+            )
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📩 Get OTP", callback_data="get_otp")],
+                [InlineKeyboardButton("🔄 Retry (Send again)", callback_data="retry_otp")],
+                [InlineKeyboardButton("📱 Device -> Logout Bot", callback_data="logout_bot")]
+            ])
+            
         await call.message.edit_text(text, reply_markup=keyboard)
 
-    # --- AUTO OTP FETCHING ---
     elif data == "get_otp":
         if user_id not in active_orders:
             return await call.answer("❌ No active order found.", show_alert=True)
@@ -246,11 +242,10 @@ async def button_handler(client, call: CallbackQuery):
                 otp_msg = msg.text
             await user_client.disconnect()
             
-            # Extract 5 digit code
             code_match = re.search(r'\b(\d{5})\b', otp_msg)
             display_otp = code_match.group(1) if code_match else "Try again"
             
-            await call.message.reply_text(f"🔢 **Your OTP:**\n`{display_otp}`\n\n_(If not received, wait 10s and click again)_")
+            await call.message.reply_text(f"🔢 Your OTP:\n`{display_otp}`\n\n_(If not received, wait 10s and click again)_")
         except Exception as e:
             await call.message.reply_text(f"❌ Error: {e}")
 
@@ -263,7 +258,7 @@ async def button_handler(client, call: CallbackQuery):
             await user_client.connect()
             await user_client.send_code(active_orders[user_id]["phone"]) 
             await user_client.disconnect()
-            await call.message.reply_text("✅ Requested a new OTP. Wait 10s and click **Get OTP**.")
+            await call.message.reply_text("✅ Requested a new OTP. Wait 10s and click Get OTP.")
         except Exception as e:
             await call.message.reply_text(f"❌ Error: {e}")
 
@@ -276,11 +271,10 @@ async def button_handler(client, call: CallbackQuery):
             await user_client.connect()
             await user_client.log_out() 
             del active_orders[user_id] 
-            await call.message.edit_text("✅ **Bot successfully logged out!**\n\nAccount is yours.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
+            await call.message.edit_text("✅ Bot successfully logged out!\n\nAccount is yours.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
         except Exception as e:
             await call.message.reply_text(f"❌ Error: {e}")
 
-    # --- ADMIN ACTIONS ---
     elif data.startswith("approve_") or data.startswith("reject_"):
         if user_id != ADMIN_ID:
             return await call.answer("❌ You are not Admin!", show_alert=True)
@@ -290,11 +284,11 @@ async def button_handler(client, call: CallbackQuery):
         
         if action == "approve":
             db.update_balance(target_user, amount)
-            await call.message.edit_caption(f"{call.message.caption}\n\n**Status: ✅ APPROVED**")
-            await client.send_message(target_user, f"✅ **Deposit Approved!** ₹{amount} added.")
+            await call.message.edit_caption(f"{call.message.caption}\n\nStatus: ✅ APPROVED")
+            await client.send_message(target_user, f"✅ Deposit Approved! ₹{amount} added.")
         else:
-            await call.message.edit_caption(f"{call.message.caption}\n\n**Status: ❌ REJECTED**")
-            await client.send_message(target_user, f"❌ **Deposit Rejected!**")
+            await call.message.edit_caption(f"{call.message.caption}\n\nStatus: ❌ REJECTED")
+            await client.send_message(target_user, f"❌ Deposit Rejected!")
         if target_user in pending_payments:
             del pending_payments[target_user]
 
@@ -306,7 +300,6 @@ async def button_handler(client, call: CallbackQuery):
         admin_steps[user_id] = "EDIT_PRICE_COUNTRY"
         await call.message.edit_text("💰 Which country's price to edit? (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
-    # --- MANAGE STOCK / REMOVE ---
     elif data == "admin_view_stock" and user_id == ADMIN_ID:
         countries = db.get_all_countries()
         if not countries:
@@ -314,7 +307,7 @@ async def button_handler(client, call: CallbackQuery):
         
         buttons = [[InlineKeyboardButton(f"🌍 {c} (Stock: {db.get_stock_count(c)})", callback_data=f"manage_stock_{c}")] for c in countries]
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.edit_text("📊 **Select Country to Manage:**", reply_markup=InlineKeyboardMarkup(buttons))
+        await call.message.edit_text("📊 Select Country to Manage:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("manage_stock_") and user_id == ADMIN_ID:
         country = data.split("_", 2)[2]
@@ -322,9 +315,20 @@ async def button_handler(client, call: CallbackQuery):
         if not accounts:
             return await call.message.edit_text(f"❌ No stock in {country}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")]]))
         
-        buttons = [[InlineKeyboardButton(f"📞 {acc['phone']}", callback_data="none"), InlineKeyboardButton("❌ Remove", callback_data=f"del_acc_{str(acc['_id'])}_{country}")] for acc in accounts]
+        buttons = []
+        for acc in accounts:
+            phone_num = acc.get("phone")
+            if not phone_num:
+                details = acc.get("details", "")
+                phone_num = details.split("|")[0] if "|" in details else "Old Account"
+
+            buttons.append([
+                InlineKeyboardButton(f"📞 {phone_num}", callback_data="none"), 
+                InlineKeyboardButton("❌ Remove", callback_data=f"del_acc_{str(acc['_id'])}_{country}")
+            ])
+            
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")])
-        await call.message.edit_text(f"📱 **Managing {country} Stock:**", reply_markup=InlineKeyboardMarkup(buttons))
+        await call.message.edit_text(f"📱 Managing {country} Stock:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("del_acc_") and user_id == ADMIN_ID:
         parts = data.split("_", 3)
@@ -337,7 +341,17 @@ async def button_handler(client, call: CallbackQuery):
             if not accounts:
                 await call.message.edit_text(f"✅ All removed from {country}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")]]))
             else:
-                buttons = [[InlineKeyboardButton(f"📞 {acc['phone']}", callback_data="none"), InlineKeyboardButton("❌ Remove", callback_data=f"del_acc_{str(acc['_id'])}_{country}")] for acc in accounts]
+                buttons = []
+                for acc in accounts:
+                    phone_num = acc.get("phone")
+                    if not phone_num:
+                        details = acc.get("details", "")
+                        phone_num = details.split("|")[0] if "|" in details else "Old Account"
+                    
+                    buttons.append([
+                        InlineKeyboardButton(f"📞 {phone_num}", callback_data="none"), 
+                        InlineKeyboardButton("❌ Remove", callback_data=f"del_acc_{str(acc['_id'])}_{country}")
+                    ])
                 buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")])
                 await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
         except Exception as e:
