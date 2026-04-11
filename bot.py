@@ -13,11 +13,11 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 1234567890)) 
 
 # --- 2. EXTERNAL API CONFIG (dgotp.shop) ---
-EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "c5bfcbc63c4e225a49fe64f4a1645f67") # Unga API Key
+EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "c5bfcbc63c4e225a49fe64f4a1645f67") 
 API_BASE_URL = "https://dgotp.shop/stubs/handler_api.php" 
 
-# --- 3. PAYMENT CONFIG (Amount anuppa vendiya details) ---
-UPI_ID = "denkielangokey@fam" # Itha unga original UPI ID ku maathikonga!
+# --- 3. PAYMENT CONFIG ---
+UPI_ID = "denkielangokey@fam" # Unga GPay/PhonePe UPI ID inga podunga
 UPI_NAME = "DENKI"
 
 app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -27,7 +27,7 @@ user_steps = {}
 pending_payments = {} 
 admin_steps = {} 
 temp_data = {} 
-active_orders = {} # Format: {user_id: {"order_id": "123", "phone": "919876543210", "country": "india"}}
+active_orders = {} 
 
 # ==========================================
 # MAIN MENU
@@ -50,7 +50,7 @@ async def start_menu(client, message):
          InlineKeyboardButton("💳 Balance", callback_data="check_balance")],
         [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
         [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), 
-         InlineKeyboardButton("👑 Owner", url="tg://user?id=1234567890")] # Unga user ID potukonga
+         InlineKeyboardButton("👑 Owner", url="tg://user?id=1234567890")] 
     ])
     await message.reply_text(text=welcome_text, reply_markup=keyboard)
 
@@ -60,10 +60,11 @@ async def start_menu(client, message):
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
     keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add New Country", callback_data="admin_add_country")],
         [InlineKeyboardButton("💰 Edit Country Price", callback_data="admin_edit_price")],
         [InlineKeyboardButton("📊 Check API Balance", callback_data="admin_api_balance")]
     ])
-    await message.reply_text("👑 Admin Panel\n\n(Stock is now fully automated via API)", reply_markup=keyboard)
+    await message.reply_text("👑 Admin Panel\n\n(Stock is fully automated via API)", reply_markup=keyboard)
 
 # ==========================================
 # TEXT & PAYMENT HANDLER
@@ -91,13 +92,31 @@ async def handle_text(client, message):
         await message.reply_photo(photo=bio, caption=f"✅ QR Code for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Send Payment Screenshot here.")
         return
 
-    # Admin Edit Price
+    # Admin Logic: Add Country & Edit Price
     if user_id == ADMIN_ID:
         step = admin_steps.get(user_id)
-        if step == "EDIT_PRICE_COUNTRY":
+        
+        # Add New Country - Step 1: Name
+        if step == "WAIT_NEW_COUNTRY":
+            temp_data[user_id] = {"new_country": text}
+            admin_steps[user_id] = "WAIT_NEW_PRICE"
+            await message.reply_text(f"✅ Country '{text}' added.\n\n💰 Enter the price for {text} (e.g., 30):")
+            
+        # Add New Country - Step 2: Price
+        elif step == "WAIT_NEW_PRICE":
+            if not text.isdigit():
+                return await message.reply_text("❌ Please enter a valid number for price.")
+            country_name = temp_data[user_id]["new_country"]
+            db.set_price(country_name, int(text))
+            admin_steps[user_id] = None
+            await message.reply_text(f"✅ Successfully added {country_name} with price ₹{text} to the menu!")
+
+        # Edit Existing Price
+        elif step == "EDIT_PRICE_COUNTRY":
             temp_data[user_id] = {"edit_country": text}
             admin_steps[user_id] = "EDIT_PRICE_AMOUNT"
             await message.reply_text(f"✅ Country selected: {text}\n\n💰 Enter new price for {text}:")
+            
         elif step == "EDIT_PRICE_AMOUNT":
             if not text.isdigit():
                 return await message.reply_text("❌ Please enter a valid number.")
@@ -148,12 +167,15 @@ async def button_handler(client, call: CallbackQuery):
         await call.message.edit_text("💰 Enter the amount to deposit (₹):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
 
     elif data == "buy_accounts":
-        # Database la irunthu only countries list mattum edukkurom. Stock is infinite via API.
         buttons = []
         for c in db.get_all_countries():
-            buttons.append([InlineKeyboardButton(f"{c} - ₹{db.get_price(c)}", callback_data=f"view_{c}")])
+            buttons.append([InlineKeyboardButton(f"🌍 {c} - ₹{db.get_price(c)}", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.edit_text("🛒 Choose a Country (Delivered via API):", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        if not db.get_all_countries():
+            await call.message.edit_text("📭 No countries available right now. Admin needs to add them.", reply_markup=InlineKeyboardMarkup(buttons))
+        else:
+            await call.message.edit_text("🛒 Choose a Country (Delivered via API):", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("view_"):
         country = data.split("_")[1]
@@ -174,9 +196,16 @@ async def button_handler(client, call: CallbackQuery):
         await call.message.edit_text("⏳ Requesting Telegram number from API... Please wait.")
 
         try:
-            service_code = "tg" # Only Telegram
-            # IMPORTANT: Itha unga API dashboard vachu update pannikonga. (India ku 22 varalama irukkum)
-            server_code = "22" if country.lower() == "india" else "0" 
+            service_code = "tg" # Telegram service code
+            
+            # PERFECT UPDATE: Added your Server ID (91 for Indian Premium)
+            # If user selects India it uses 91. If they select USA, it uses 187 (example). 0 is random.
+            if country.lower() == "india":
+                server_code = "91"  
+            elif country.lower() == "usa":
+                server_code = "187" # Example for USA, change if needed
+            else:
+                server_code = "0"
             
             get_num_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getNumber&service={service_code}&server={server_code}"
             response = requests.get(get_num_url).text
@@ -260,7 +289,6 @@ async def button_handler(client, call: CallbackQuery):
         price = db.get_price(country)
         
         try:
-            # action 8 is standard for cancelling in SMS API
             cancel_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=setStatus&status=8&id={order_id}"
             requests.get(cancel_url)
             
@@ -272,7 +300,7 @@ async def button_handler(client, call: CallbackQuery):
             await call.message.reply_text(f"❌ Error cancelling order: {e}")
 
     # ==========================================
-    # ADMIN DEPOSIT APPROVALS
+    # ADMIN DEPOSIT APPROVALS & MISC
     # ==========================================
     elif data.startswith("approve_") or data.startswith("reject_"):
         if user_id != ADMIN_ID:
@@ -291,9 +319,14 @@ async def button_handler(client, call: CallbackQuery):
         if target_user in pending_payments:
             del pending_payments[target_user]
 
-    # ==========================================
-    # ADMIN MISC FUNCTIONS
-    # ==========================================
+    elif data == "admin_add_country" and user_id == ADMIN_ID:
+        admin_steps[user_id] = "WAIT_NEW_COUNTRY"
+        await call.message.edit_text("🌍 Enter New Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
+
+    elif data == "admin_edit_price" and user_id == ADMIN_ID:
+        admin_steps[user_id] = "EDIT_PRICE_COUNTRY"
+        await call.message.edit_text("💰 Which country's price to edit? (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
+
     elif data == "admin_api_balance" and user_id == ADMIN_ID:
         try:
             bal_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getBalance"
@@ -301,10 +334,6 @@ async def button_handler(client, call: CallbackQuery):
             await call.answer(f"API Dashboard Balance: {resp}", show_alert=True)
         except:
             await call.answer("❌ Could not fetch API balance.", show_alert=True)
-
-    elif data == "admin_edit_price" and user_id == ADMIN_ID:
-        admin_steps[user_id] = "EDIT_PRICE_COUNTRY"
-        await call.message.edit_text("💰 Which country's price to edit? (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
 if __name__ == "__main__":
     print("🚀 API Bot is starting...")
