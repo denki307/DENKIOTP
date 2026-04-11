@@ -1,35 +1,33 @@
 import os
 import io
 import qrcode
-import re
 import requests
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import database as db
 
-# --- BOT CREDENTIALS ---
+# --- 1. BOT CREDENTIALS ---
 API_ID = int(os.environ.get("API_ID", 1234567)) 
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH") 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN") 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 1234567890)) 
 
-# --- EXTERNAL API CONFIG (OTP Provider) ---
-EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "C5bfcbc63c4e225a49fe64f4a1645f67")
-# Intha URL-a unga OTP API provider URL-ku maathikonga (e.g., https://api.otpweb.shop/stubs/handler_api.php)
-API_BASE_URL = "https://smshub.org/stubs/handler_api.php" 
+# --- 2. EXTERNAL API CONFIG (dgotp.shop) ---
+EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "c5bfcbc63c4e225a49fe64f4a1645f67") # Unga API Key
+API_BASE_URL = "https://dgotp.shop/stubs/handler_api.php" 
 
-# --- PAYMENT CONFIG ---
-UPI_ID = "denkielangokey@fam"
+# --- 3. PAYMENT CONFIG (Amount anuppa vendiya details) ---
+UPI_ID = "denkielangokey@fam" # Itha unga original UPI ID ku maathikonga!
 UPI_NAME = "DENKI"
 
 app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- MEMORY STORAGE ---
+# --- 4. MEMORY STORAGE ---
 user_steps = {} 
 pending_payments = {} 
 admin_steps = {} 
 temp_data = {} 
-active_orders = {} # {user_id: {"order_id": "123", "phone": "919876543210", "country": "india"}}
+active_orders = {} # Format: {user_id: {"order_id": "123", "phone": "919876543210", "country": "india"}}
 
 # ==========================================
 # MAIN MENU
@@ -43,7 +41,7 @@ async def start_menu(client, message):
         "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
         "[ DESTROYERS ]! (API Resell Center)\n\n"
         f"💳 Your Balance: ₹{balance}\n"
-        "🏷 Bot Status: ✅ Auto API OTP Enabled"
+        "🏷 Bot Status: ✅ Auto API OTP Enabled (Telegram Only)"
     )
     
     keyboard = InlineKeyboardMarkup([
@@ -52,7 +50,7 @@ async def start_menu(client, message):
          InlineKeyboardButton("💳 Balance", callback_data="check_balance")],
         [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
         [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), 
-         InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
+         InlineKeyboardButton("👑 Owner", url="tg://user?id=1234567890")] # Unga user ID potukonga
     ])
     await message.reply_text(text=welcome_text, reply_markup=keyboard)
 
@@ -90,7 +88,7 @@ async def handle_text(client, message):
         qrcode.make(upi_url).save(bio, 'PNG')
         bio.seek(0)
         
-        await message.reply_photo(photo=bio, caption=f"✅ QR Code for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Send Screenshot here.")
+        await message.reply_photo(photo=bio, caption=f"✅ QR Code for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Send Payment Screenshot here.")
         return
 
     # Admin Edit Price
@@ -115,7 +113,7 @@ async def handle_screenshot(client, message):
         amount = pending_payments.get(user_id, 0)
         admin_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approve", callback_data=f"approve_{user_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user_id}")]])
         await client.send_photo(chat_id=ADMIN_ID, photo=message.photo.file_id, caption=f"🔔 Deposit Request\n👤 ID: `{user_id}`\n💰 Amount: ₹{amount}", reply_markup=admin_keyboard)
-        await message.reply_text("⏳ Screenshot sent to admin.")
+        await message.reply_text("⏳ Screenshot sent to admin. Please wait for approval.")
         user_steps[user_id] = None
 
 # ==========================================
@@ -138,7 +136,7 @@ async def button_handler(client, call: CallbackQuery):
             [InlineKeyboardButton("🔥 Buy Accounts", callback_data="buy_accounts")],
             [InlineKeyboardButton("💰 Refill Wallet", callback_data="refill_wallet"), InlineKeyboardButton("💳 Balance", callback_data="check_balance")],
             [InlineKeyboardButton("💬 Support", url="https://t.me/your_support")],
-            [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel"), InlineKeyboardButton("👑 Owner", url="https://t.me/your_owner_id")]
+            [InlineKeyboardButton("📢 Channel", url="https://t.me/your_channel")]
         ])
         await call.message.edit_text(text=welcome_text, reply_markup=keyboard)
 
@@ -147,23 +145,23 @@ async def button_handler(client, call: CallbackQuery):
 
     elif data == "refill_wallet":
         user_steps[user_id] = "ENTER_AMOUNT"
-        await call.message.edit_text("💰 Enter the amount to deposit:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
+        await call.message.edit_text("💰 Enter the amount to deposit (₹):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
 
     elif data == "buy_accounts":
-        # API moolama stock automtaic. Database la irunthu only countries mattum edukkurom.
+        # Database la irunthu only countries list mattum edukkurom. Stock is infinite via API.
         buttons = []
         for c in db.get_all_countries():
             buttons.append([InlineKeyboardButton(f"{c} - ₹{db.get_price(c)}", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.edit_text("🛒 Choose a Country (Automated via API):", reply_markup=InlineKeyboardMarkup(buttons))
+        await call.message.edit_text("🛒 Choose a Country (Delivered via API):", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("view_"):
         country = data.split("_")[1]
         price = db.get_price(country)
-        await call.message.edit_text(f"🌍 {country} Accounts\n\n💵 Price: ₹{price}\n⚡ Delivered instantly via API", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
+        await call.message.edit_text(f"🌍 {country} Telegram Accounts\n\n💵 Price: ₹{price}\n⚡ Fast Delivery", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
     # ==========================================
-    # CORE API INTEGRATION: BUY NUMBER
+    # CORE API: BUY NUMBER (TELEGRAM ONLY)
     # ==========================================
     elif data.startswith("buy_confirm_"):
         country = data.split("_")[2]
@@ -173,23 +171,22 @@ async def button_handler(client, call: CallbackQuery):
         if current_bal < price:
             return await call.answer(f"❌ Low Balance! Need ₹{price}.", show_alert=True)
             
-        await call.message.edit_text("⏳ Requesting number from API... Please wait.")
+        await call.message.edit_text("⏳ Requesting Telegram number from API... Please wait.")
 
         try:
-            # Country code mapping (Example: 0 for Russia, 22 for India in smshub). Itha unga API ku etha mathiri mathikonga.
-            api_country_code = "22" if country.lower() == "india" else "0" 
+            service_code = "tg" # Only Telegram
+            # IMPORTANT: Itha unga API dashboard vachu update pannikonga. (India ku 22 varalama irukkum)
+            server_code = "22" if country.lower() == "india" else "0" 
             
-            # API Call: Get Number
-            get_num_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getNumber&service=tg&country={api_country_code}"
+            get_num_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getNumber&service={service_code}&server={server_code}"
             response = requests.get(get_num_url).text
             
             if "ACCESS_NUMBER" in response:
-                # Format usually: ACCESS_NUMBER:12345678:919876543210
                 parts = response.split(":")
                 order_id = parts[1]
                 phone_num = parts[2]
                 
-                # Deduct balance only after successful API hit
+                # Deduct balance
                 db.update_balance(user_id, -price)
                 
                 # Save active order
@@ -201,7 +198,7 @@ async def button_handler(client, call: CallbackQuery):
                 
                 text = (
                     f"✅ Purchase Successful!\n\n"
-                    f"📱 Number: `+{phone_num}`\n\n"
+                    f"📱 Telegram Number: `+{phone_num}`\n\n"
                     f"👉 Enter this number in your Telegram App.\n"
                     f"👉 Then click '📩 Get OTP' below."
                 )
@@ -211,14 +208,13 @@ async def button_handler(client, call: CallbackQuery):
                 ])
                 await call.message.edit_text(text, reply_markup=keyboard)
             else:
-                # API error (NO_NUMBERS, NO_BALANCE, etc.)
                 await call.message.edit_text(f"❌ API Error: {response}\n\nTry again later.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
                 
         except Exception as e:
             await call.message.edit_text(f"❌ Server Error: {e}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
     # ==========================================
-    # CORE API INTEGRATION: GET OTP
+    # CORE API: GET OTP
     # ==========================================
     elif data == "get_otp":
         if user_id not in active_orders:
@@ -228,17 +224,24 @@ async def button_handler(client, call: CallbackQuery):
         order_id = active_orders[user_id]["order_id"]
         
         try:
-            # API Call: Get Status/OTP
             get_otp_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getStatus&id={order_id}"
             response = requests.get(get_otp_url).text
             
             if "STATUS_OK" in response:
                 otp_code = response.split(":")[1]
                 await call.message.reply_text(f"🔢 Your OTP:\n`{otp_code}`\n\n✅ Login Successful!")
-                # Remove from active orders once successful
                 del active_orders[user_id]
-            elif response == "STATUS_WAIT_CODE":
-                await call.answer("⏳ OTP not received yet. Waiting... Try again in 10s.", show_alert=True)
+                
+            elif response in ["STATUS_WAIT_CODE", "STATUS_WAIT_RETRY", "STATUS_WAIT_RESEND"]:
+                await call.answer("⏳ OTP innum varala... Waiting. Oru 10s kalichu click pannunga.", show_alert=True)
+                
+            elif response == "STATUS_CANCEL":
+                country = active_orders[user_id]["country"]
+                price = db.get_price(country)
+                db.update_balance(user_id, price)
+                await call.message.reply_text(f"🚫 Number API aal cancel aagiduchu.\n💰 ₹{price} refunded.")
+                del active_orders[user_id]
+                
             else:
                 await call.message.reply_text(f"⚠️ API Status: {response}")
                 
@@ -246,7 +249,7 @@ async def button_handler(client, call: CallbackQuery):
             await call.message.reply_text(f"❌ Error fetching OTP: {e}")
 
     # ==========================================
-    # CORE API INTEGRATION: CANCEL & REFUND
+    # CORE API: CANCEL & REFUND
     # ==========================================
     elif data == "cancel_order":
         if user_id not in active_orders:
@@ -257,19 +260,20 @@ async def button_handler(client, call: CallbackQuery):
         price = db.get_price(country)
         
         try:
-            # API Call: Cancel Order (Action code 8 for cancel in standard APIs)
+            # action 8 is standard for cancelling in SMS API
             cancel_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=setStatus&status=8&id={order_id}"
             requests.get(cancel_url)
             
-            # Refund user balance
             db.update_balance(user_id, price)
             del active_orders[user_id]
             
-            await call.message.edit_text(f"🚫 Order Cancelled.\n💰 ₹{price} has been refunded to your wallet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
+            await call.message.edit_text(f"🚫 Order Cancelled.\n💰 ₹{price} refunded to wallet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
         except Exception as e:
             await call.message.reply_text(f"❌ Error cancelling order: {e}")
 
-    # Admin Approvals
+    # ==========================================
+    # ADMIN DEPOSIT APPROVALS
+    # ==========================================
     elif data.startswith("approve_") or data.startswith("reject_"):
         if user_id != ADMIN_ID:
             return await call.answer("❌ You are not Admin!", show_alert=True)
@@ -287,12 +291,14 @@ async def button_handler(client, call: CallbackQuery):
         if target_user in pending_payments:
             del pending_payments[target_user]
 
-    # Admin specific API check
+    # ==========================================
+    # ADMIN MISC FUNCTIONS
+    # ==========================================
     elif data == "admin_api_balance" and user_id == ADMIN_ID:
         try:
             bal_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getBalance"
             resp = requests.get(bal_url).text
-            await call.answer(f"API Provider Balance: {resp}", show_alert=True)
+            await call.answer(f"API Dashboard Balance: {resp}", show_alert=True)
         except:
             await call.answer("❌ Could not fetch API balance.", show_alert=True)
 
@@ -303,3 +309,4 @@ async def button_handler(client, call: CallbackQuery):
 if __name__ == "__main__":
     print("🚀 API Bot is starting...")
     app.run()
+
