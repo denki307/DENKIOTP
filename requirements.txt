@@ -1,6 +1,4 @@
 pyrogram
 tgcrypto
+requests
 qrcode
-pillow
-pymongo
-dnspython
