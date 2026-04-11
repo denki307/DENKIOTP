@@ -1,6 +1,5 @@
 pyrogram
 tgcrypto
-requests
 qrcode
 pymongo
-
+aiohttp
