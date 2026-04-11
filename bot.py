@@ -1,28 +1,58 @@
 import os
 import io
 import qrcode
-import requests
+import aiohttp
+from pymongo import MongoClient
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-import database as db
 
-# --- 1. BOT CREDENTIALS ---
+# ==========================================
+# 1. DATABASE CONFIGURATION (MongoDB)
+# ==========================================
+# Unga original MongoDB link-a inga podunga
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb+srv://UNGA_MONGODB_URL_INGA_PODUNGA")
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client["api_bot_db"]
+
+users_col = db["users"]
+prices_col = db["prices"]
+
+def get_balance(user_id):
+    user = users_col.find_one({"user_id": user_id})
+    return user.get("balance", 0) if user else 0
+
+def update_balance(user_id, amount):
+    users_col.update_one({"user_id": user_id}, {"$inc": {"balance": amount}}, upsert=True)
+
+def get_all_countries():
+    return [doc["country"] for doc in prices_col.find()]
+
+def get_price(country):
+    doc = prices_col.find_one({"country": country})
+    return doc.get("price", 0) if doc else 0
+
+def set_price(country, price):
+    prices_col.update_one({"country": country}, {"$set": {"price": price}}, upsert=True)
+
+
+# ==========================================
+# 2. BOT & API CREDENTIALS
+# ==========================================
 API_ID = int(os.environ.get("API_ID", 1234567)) 
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH") 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN") 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 1234567890)) 
 
-# --- 2. EXTERNAL API CONFIG (dgotp.shop) ---
 EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "c5bfcbc63c4e225a49fe64f4a1645f67") 
 API_BASE_URL = "https://dgotp.shop/stubs/handler_api.php" 
 
-# --- 3. PAYMENT CONFIG ---
-UPI_ID = "denkielangokey@fam" # Unga GPay/PhonePe UPI ID inga podunga
+# --- PAYMENT CONFIG ---
+UPI_ID = "denkielangokey@fam" 
 UPI_NAME = "DENKI"
 
 app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- 4. MEMORY STORAGE ---
+# --- MEMORY STORAGE ---
 user_steps = {} 
 pending_payments = {} 
 admin_steps = {} 
@@ -35,7 +65,7 @@ active_orders = {}
 @app.on_message(filters.command("start") & filters.private)
 async def start_menu(client, message):
     user_id = message.from_user.id
-    balance = db.get_balance(user_id)
+    balance = get_balance(user_id)
         
     welcome_text = (
         "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
@@ -54,9 +84,6 @@ async def start_menu(client, message):
     ])
     await message.reply_text(text=welcome_text, reply_markup=keyboard)
 
-# ==========================================
-# ADMIN PANEL
-# ==========================================
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
     keyboard = InlineKeyboardMarkup([
@@ -66,15 +93,11 @@ async def admin_panel(client, message):
     ])
     await message.reply_text("👑 Admin Panel\n\n(Stock is fully automated via API)", reply_markup=keyboard)
 
-# ==========================================
-# TEXT & PAYMENT HANDLER
-# ==========================================
 @app.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
     text = message.text
 
-    # Wallet Refill Logic
     if user_steps.get(user_id) == "ENTER_AMOUNT":
         if not text.isdigit() or int(text) <= 0:
             return await message.reply_text("❌ Invalid amount.")
@@ -92,26 +115,21 @@ async def handle_text(client, message):
         await message.reply_photo(photo=bio, caption=f"✅ QR Code for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Send Payment Screenshot here.")
         return
 
-    # Admin Logic: Add Country & Edit Price
     if user_id == ADMIN_ID:
         step = admin_steps.get(user_id)
-        
-        # Add New Country - Step 1: Name
         if step == "WAIT_NEW_COUNTRY":
             temp_data[user_id] = {"new_country": text}
             admin_steps[user_id] = "WAIT_NEW_PRICE"
             await message.reply_text(f"✅ Country '{text}' added.\n\n💰 Enter the price for {text} (e.g., 30):")
             
-        # Add New Country - Step 2: Price
         elif step == "WAIT_NEW_PRICE":
             if not text.isdigit():
                 return await message.reply_text("❌ Please enter a valid number for price.")
             country_name = temp_data[user_id]["new_country"]
-            db.set_price(country_name, int(text))
+            set_price(country_name, int(text))
             admin_steps[user_id] = None
             await message.reply_text(f"✅ Successfully added {country_name} with price ₹{text} to the menu!")
-
-        # Edit Existing Price
+            
         elif step == "EDIT_PRICE_COUNTRY":
             temp_data[user_id] = {"edit_country": text}
             admin_steps[user_id] = "EDIT_PRICE_AMOUNT"
@@ -120,11 +138,10 @@ async def handle_text(client, message):
         elif step == "EDIT_PRICE_AMOUNT":
             if not text.isdigit():
                 return await message.reply_text("❌ Please enter a valid number.")
-            db.set_price(temp_data[user_id]["edit_country"], int(text))
+            set_price(temp_data[user_id]["edit_country"], int(text))
             admin_steps[user_id] = None
             await message.reply_text(f"✅ Price changed to ₹{text}.")
 
-# Screenshot Handler
 @app.on_message(filters.photo & filters.private)
 async def handle_screenshot(client, message):
     user_id = message.from_user.id
@@ -144,7 +161,8 @@ async def button_handler(client, call: CallbackQuery):
     user_id = call.from_user.id
     
     if data == "back_to_main":
-        balance = db.get_balance(user_id)
+        await call.answer()
+        balance = get_balance(user_id)
         welcome_text = (
             "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
             "[ DESTROYERS ]! (API Resell Center)\n\n"
@@ -160,70 +178,63 @@ async def button_handler(client, call: CallbackQuery):
         await call.message.edit_text(text=welcome_text, reply_markup=keyboard)
 
     elif data == "check_balance":
-        await call.answer(f"💳 Your balance is: ₹{db.get_balance(user_id)}", show_alert=True)
+        await call.answer(f"💳 Your balance is: ₹{get_balance(user_id)}", show_alert=True)
 
     elif data == "refill_wallet":
+        await call.answer()
         user_steps[user_id] = "ENTER_AMOUNT"
         await call.message.edit_text("💰 Enter the amount to deposit (₹):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
 
     elif data == "buy_accounts":
+        await call.answer()
         buttons = []
-        for c in db.get_all_countries():
-            buttons.append([InlineKeyboardButton(f"🌍 {c} - ₹{db.get_price(c)}", callback_data=f"view_{c}")])
+        for c in get_all_countries():
+            buttons.append([InlineKeyboardButton(f"🌍 {c} - ₹{get_price(c)}", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
         
-        if not db.get_all_countries():
+        if not get_all_countries():
             await call.message.edit_text("📭 No countries available right now. Admin needs to add them.", reply_markup=InlineKeyboardMarkup(buttons))
         else:
             await call.message.edit_text("🛒 Choose a Country (Delivered via API):", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("view_"):
+        await call.answer()
         country = data.split("_")[1]
-        price = db.get_price(country)
+        price = get_price(country)
         await call.message.edit_text(f"🌍 {country} Telegram Accounts\n\n💵 Price: ₹{price}\n⚡ Fast Delivery", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
-    # ==========================================
-    # CORE API: BUY NUMBER (TELEGRAM ONLY)
-    # ==========================================
     elif data.startswith("buy_confirm_"):
+        await call.answer("⏳ Fetching number...", show_alert=False)
         country = data.split("_")[2]
-        price = db.get_price(country)
-        current_bal = db.get_balance(user_id)
+        price = get_price(country)
+        current_bal = get_balance(user_id)
         
         if current_bal < price:
             return await call.answer(f"❌ Low Balance! Need ₹{price}.", show_alert=True)
-            
-        await call.message.edit_text("⏳ Requesting Telegram number from API... Please wait.")
 
         try:
-            service_code = "tg" # Telegram service code
-            
-            # PERFECT UPDATE: Added your Server ID (91 for Indian Premium)
-            # If user selects India it uses 91. If they select USA, it uses 187 (example). 0 is random.
+            service_code = "tg" 
             if country.lower() == "india":
                 server_code = "91"  
             elif country.lower() == "usa":
-                server_code = "187" # Example for USA, change if needed
+                server_code = "187" 
             else:
                 server_code = "0"
             
             get_num_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getNumber&service={service_code}&server={server_code}"
-            response = requests.get(get_num_url).text
+            
+            # FAST ASYNC API CALL
+            async with aiohttp.ClientSession() as session:
+                async with session.get(get_num_url) as resp:
+                    response = await resp.text()
             
             if "ACCESS_NUMBER" in response:
                 parts = response.split(":")
                 order_id = parts[1]
                 phone_num = parts[2]
                 
-                # Deduct balance
-                db.update_balance(user_id, -price)
-                
-                # Save active order
-                active_orders[user_id] = {
-                    "order_id": order_id,
-                    "phone": phone_num,
-                    "country": country
-                }
+                update_balance(user_id, -price)
+                active_orders[user_id] = {"order_id": order_id, "phone": phone_num, "country": country}
                 
                 text = (
                     f"✅ Purchase Successful!\n\n"
@@ -242,75 +253,73 @@ async def button_handler(client, call: CallbackQuery):
         except Exception as e:
             await call.message.edit_text(f"❌ Server Error: {e}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
-    # ==========================================
-    # CORE API: GET OTP
-    # ==========================================
     elif data == "get_otp":
         if user_id not in active_orders:
             return await call.answer("❌ No active order found.", show_alert=True)
             
-        await call.answer("⏳ Fetching OTP from API... Please wait.", show_alert=False)
+        await call.answer("⏳ Requesting OTP...", show_alert=False)
         order_id = active_orders[user_id]["order_id"]
         
         try:
             get_otp_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getStatus&id={order_id}"
-            response = requests.get(get_otp_url).text
+            
+            # FAST ASYNC API CALL
+            async with aiohttp.ClientSession() as session:
+                async with session.get(get_otp_url) as resp:
+                    response = await resp.text()
             
             if "STATUS_OK" in response:
                 otp_code = response.split(":")[1]
                 await call.message.reply_text(f"🔢 Your OTP:\n`{otp_code}`\n\n✅ Login Successful!")
                 del active_orders[user_id]
-                
             elif response in ["STATUS_WAIT_CODE", "STATUS_WAIT_RETRY", "STATUS_WAIT_RESEND"]:
                 await call.answer("⏳ OTP innum varala... Waiting. Oru 10s kalichu click pannunga.", show_alert=True)
-                
             elif response == "STATUS_CANCEL":
                 country = active_orders[user_id]["country"]
-                price = db.get_price(country)
-                db.update_balance(user_id, price)
+                price = get_price(country)
+                update_balance(user_id, price)
                 await call.message.reply_text(f"🚫 Number API aal cancel aagiduchu.\n💰 ₹{price} refunded.")
                 del active_orders[user_id]
-                
             else:
                 await call.message.reply_text(f"⚠️ API Status: {response}")
                 
         except Exception as e:
             await call.message.reply_text(f"❌ Error fetching OTP: {e}")
 
-    # ==========================================
-    # CORE API: CANCEL & REFUND
-    # ==========================================
     elif data == "cancel_order":
         if user_id not in active_orders:
             return await call.answer("❌ No active order to cancel.", show_alert=True)
             
+        await call.answer("⏳ Cancelling...", show_alert=False)
         order_id = active_orders[user_id]["order_id"]
         country = active_orders[user_id]["country"]
-        price = db.get_price(country)
+        price = get_price(country)
         
         try:
             cancel_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=setStatus&status=8&id={order_id}"
-            requests.get(cancel_url)
             
-            db.update_balance(user_id, price)
+            # FAST ASYNC API CALL
+            async with aiohttp.ClientSession() as session:
+                async with session.get(cancel_url) as resp:
+                    pass 
+            
+            update_balance(user_id, price)
             del active_orders[user_id]
             
             await call.message.edit_text(f"🚫 Order Cancelled.\n💰 ₹{price} refunded to wallet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
         except Exception as e:
             await call.message.reply_text(f"❌ Error cancelling order: {e}")
 
-    # ==========================================
-    # ADMIN DEPOSIT APPROVALS & MISC
-    # ==========================================
     elif data.startswith("approve_") or data.startswith("reject_"):
         if user_id != ADMIN_ID:
             return await call.answer("❌ You are not Admin!", show_alert=True)
+        await call.answer()
         action, target_user = data.split("_")
         target_user = int(target_user)
         amount = pending_payments.get(target_user, 0)
         
         if action == "approve":
-            db.update_balance(target_user, amount)
+            update_balance(target_user, amount)
             await call.message.edit_caption(f"{call.message.caption}\n\nStatus: ✅ APPROVED")
             await client.send_message(target_user, f"✅ Deposit Approved! ₹{amount} added.")
         else:
@@ -320,22 +329,27 @@ async def button_handler(client, call: CallbackQuery):
             del pending_payments[target_user]
 
     elif data == "admin_add_country" and user_id == ADMIN_ID:
+        await call.answer()
         admin_steps[user_id] = "WAIT_NEW_COUNTRY"
         await call.message.edit_text("🌍 Enter New Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
     elif data == "admin_edit_price" and user_id == ADMIN_ID:
+        await call.answer()
         admin_steps[user_id] = "EDIT_PRICE_COUNTRY"
         await call.message.edit_text("💰 Which country's price to edit? (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
     elif data == "admin_api_balance" and user_id == ADMIN_ID:
+        await call.answer("Fetching balance...", show_alert=False)
         try:
             bal_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getBalance"
-            resp = requests.get(bal_url).text
-            await call.answer(f"API Dashboard Balance: {resp}", show_alert=True)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(bal_url) as resp:
+                    response = await resp.text()
+            await call.answer(f"API Dashboard Balance: {response}", show_alert=True)
         except:
             await call.answer("❌ Could not fetch API balance.", show_alert=True)
 
 if __name__ == "__main__":
-    print("🚀 API Bot is starting...")
+    print("🚀 FAST API Bot is starting...")
     app.run()
 
