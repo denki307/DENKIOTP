@@ -2,26 +2,38 @@ import os
 import io
 import qrcode
 import re
+import requests
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import database as db
 
+# --- BOT CREDENTIALS ---
 API_ID = int(os.environ.get("API_ID", 1234567)) 
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH") 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN") 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 1234567890)) 
 
+# --- EXTERNAL API CONFIG (OTP Provider) ---
+EXTERNAL_API_KEY = os.environ.get("EXTERNAL_API_KEY", "C5bfcbc63c4e225a49fe64f4a1645f67")
+# Intha URL-a unga OTP API provider URL-ku maathikonga (e.g., https://api.otpweb.shop/stubs/handler_api.php)
+API_BASE_URL = "https://smshub.org/stubs/handler_api.php" 
+
+# --- PAYMENT CONFIG ---
 UPI_ID = "denkielangokey@fam"
 UPI_NAME = "DENKI"
 
 app = Client("resell_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# --- MEMORY STORAGE ---
 user_steps = {} 
 pending_payments = {} 
 admin_steps = {} 
 temp_data = {} 
-active_orders = {} 
+active_orders = {} # {user_id: {"order_id": "123", "phone": "919876543210", "country": "india"}}
 
+# ==========================================
+# MAIN MENU
+# ==========================================
 @app.on_message(filters.command("start") & filters.private)
 async def start_menu(client, message):
     user_id = message.from_user.id
@@ -29,9 +41,9 @@ async def start_menu(client, message):
         
     welcome_text = (
         "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
-        "[ DESTROYERS ]! (Resell Center)\n\n"
+        "[ DESTROYERS ]! (API Resell Center)\n\n"
         f"💳 Your Balance: ₹{balance}\n"
-        "🏷 Bot Status: ✅ Auto OTP Enabled"
+        "🏷 Bot Status: ✅ Auto API OTP Enabled"
     )
     
     keyboard = InlineKeyboardMarkup([
@@ -44,20 +56,26 @@ async def start_menu(client, message):
     ])
     await message.reply_text(text=welcome_text, reply_markup=keyboard)
 
+# ==========================================
+# ADMIN PANEL
+# ==========================================
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Active Session", callback_data="admin_add_acc")],
-        [InlineKeyboardButton("📊 Manage Stock", callback_data="admin_view_stock")],
-        [InlineKeyboardButton("💰 Edit Price", callback_data="admin_edit_price")]
+        [InlineKeyboardButton("💰 Edit Country Price", callback_data="admin_edit_price")],
+        [InlineKeyboardButton("📊 Check API Balance", callback_data="admin_api_balance")]
     ])
-    await message.reply_text("👑 Admin Panel\n\nWhat do you want to do?", reply_markup=keyboard)
+    await message.reply_text("👑 Admin Panel\n\n(Stock is now fully automated via API)", reply_markup=keyboard)
 
+# ==========================================
+# TEXT & PAYMENT HANDLER
+# ==========================================
 @app.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
     text = message.text
 
+    # Wallet Refill Logic
     if user_steps.get(user_id) == "ENTER_AMOUNT":
         if not text.isdigit() or int(text) <= 0:
             return await message.reply_text("❌ Invalid amount.")
@@ -75,51 +93,10 @@ async def handle_text(client, message):
         await message.reply_photo(photo=bio, caption=f"✅ QR Code for ₹{amount}.\n\n📲 UPI ID: `{UPI_ID}`\n\n👉 Send Screenshot here.")
         return
 
+    # Admin Edit Price
     if user_id == ADMIN_ID:
         step = admin_steps.get(user_id)
-        
-        if step == "WAIT_COUNTRY":
-            temp_data[user_id] = {"country": text}
-            admin_steps[user_id] = "WAIT_NUMBER"
-            await message.reply_text(f"✅ Country: {text}\n\n📞 Enter Phone Number with country code (e.g., +918888888888):")
-            
-        elif step == "WAIT_NUMBER":
-            phone = text
-            temp_data[user_id]["phone"] = phone
-            await message.reply_text("⏳ Generating Session... Please wait.")
-            
-            temp_client = Client(f"temp_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
-            await temp_client.connect()
-            try:
-                sent_code = await temp_client.send_code(phone)
-                temp_data[user_id]["phone_code_hash"] = sent_code.phone_code_hash
-                temp_data[user_id]["client"] = temp_client
-                admin_steps[user_id] = "WAIT_OTP"
-                await message.reply_text(f"✅ Code sent to {phone}.\n🔢 Enter the OTP you received:")
-            except Exception as e:
-                await message.reply_text(f"❌ Error sending code: {e}")
-                await temp_client.disconnect()
-                admin_steps[user_id] = None
-                
-        elif step == "WAIT_OTP":
-            otp = text
-            temp_client = temp_data[user_id]["client"]
-            phone = temp_data[user_id]["phone"]
-            phone_code_hash = temp_data[user_id]["phone_code_hash"]
-            country = temp_data[user_id]["country"]
-            
-            try:
-                await temp_client.sign_in(phone, phone_code_hash, otp)
-                session_string = await temp_client.export_session_string()
-                db.add_account(country, phone, session_string)
-                await message.reply_text(f"🚀 Success! Active Session added to {country} stock.\nTotal Stock: {db.get_stock_count(country)}")
-            except Exception as e:
-                await message.reply_text(f"❌ Login Failed: {e}. Check if 2FA is enabled or OTP is wrong.")
-            finally:
-                await temp_client.disconnect()
-                admin_steps[user_id] = None
-            
-        elif step == "EDIT_PRICE_COUNTRY":
+        if step == "EDIT_PRICE_COUNTRY":
             temp_data[user_id] = {"edit_country": text}
             admin_steps[user_id] = "EDIT_PRICE_AMOUNT"
             await message.reply_text(f"✅ Country selected: {text}\n\n💰 Enter new price for {text}:")
@@ -130,6 +107,7 @@ async def handle_text(client, message):
             admin_steps[user_id] = None
             await message.reply_text(f"✅ Price changed to ₹{text}.")
 
+# Screenshot Handler
 @app.on_message(filters.photo & filters.private)
 async def handle_screenshot(client, message):
     user_id = message.from_user.id
@@ -140,6 +118,9 @@ async def handle_screenshot(client, message):
         await message.reply_text("⏳ Screenshot sent to admin.")
         user_steps[user_id] = None
 
+# ==========================================
+# CALLBACK HANDLERS (INLINE BUTTONS)
+# ==========================================
 @app.on_callback_query()
 async def button_handler(client, call: CallbackQuery):
     data = call.data
@@ -149,9 +130,9 @@ async def button_handler(client, call: CallbackQuery):
         balance = db.get_balance(user_id)
         welcome_text = (
             "💪 Welcome ⇌ ≛ ₓWANTED™ ⋆ - ⭓ ≛ 👑 ⌜ 𝐎𝐩 ⌟\n"
-            "[ DESTROYERS ]! (Resell Center)\n\n"
+            "[ DESTROYERS ]! (API Resell Center)\n\n"
             f"💳 Your Balance: ₹{balance}\n"
-            "🏷 Bot Status: ✅ Auto OTP Enabled"
+            "🏷 Bot Status: ✅ Auto API OTP Enabled"
         )
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔥 Buy Accounts", callback_data="buy_accounts")],
@@ -169,112 +150,126 @@ async def button_handler(client, call: CallbackQuery):
         await call.message.edit_text("💰 Enter the amount to deposit:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
 
     elif data == "buy_accounts":
+        # API moolama stock automtaic. Database la irunthu only countries mattum edukkurom.
         buttons = []
         for c in db.get_all_countries():
-            stock = db.get_stock_count(c)
-            if stock > 0:
-                buttons.append([InlineKeyboardButton(f"{c} - ₹{db.get_price(c)} (Stock: {stock})", callback_data=f"view_{c}")])
+            buttons.append([InlineKeyboardButton(f"{c} - ₹{db.get_price(c)}", callback_data=f"view_{c}")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.edit_text("🛒 Choose a Country:", reply_markup=InlineKeyboardMarkup(buttons))
+        await call.message.edit_text("🛒 Choose a Country (Automated via API):", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("view_"):
         country = data.split("_")[1]
         price = db.get_price(country)
-        await call.message.edit_text(f"🌍 {country} Accounts\n\n📦 Stock: {db.get_stock_count(country)}\n💵 Price: ₹{price}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
+        await call.message.edit_text(f"🌍 {country} Accounts\n\n💵 Price: ₹{price}\n⚡ Delivered instantly via API", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"💸 Buy Now (₹{price})", callback_data=f"buy_confirm_{country}")], [InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
+    # ==========================================
+    # CORE API INTEGRATION: BUY NUMBER
+    # ==========================================
     elif data.startswith("buy_confirm_"):
         country = data.split("_")[2]
         price = db.get_price(country)
         current_bal = db.get_balance(user_id)
         
-        if db.get_stock_count(country) == 0:
-            return await call.answer("❌ Out of stock.", show_alert=True)
         if current_bal < price:
             return await call.answer(f"❌ Low Balance! Need ₹{price}.", show_alert=True)
             
-        acc_data = db.get_and_remove_account(country)
-        db.update_balance(user_id, -price)
-        
-        phone_num = acc_data.get("phone")
-        is_old_account = False
-        
-        if not phone_num:
-            details = acc_data.get("details", "")
-            phone_num = details.split("|")[0] if "|" in details else "Manual Account"
-            is_old_account = True
+        await call.message.edit_text("⏳ Requesting number from API... Please wait.")
 
-        if is_old_account:
-            text = (
-                f"✅ Purchase Successful!\n\n"
-                f"📱 Account Details:\n`{acc_data.get('details')}`\n\n"
-                f"⚠️ This is an old manual account. No Auto OTP available."
-            )
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]])
-        else:
-            active_orders[user_id] = acc_data 
-            text = (
-                f"✅ Purchase Successful!\n\n"
-                f"📱 Number: `{phone_num}`\n\n"
-                f"👉 Enter this number in your Telegram App.\n"
-                f"👉 Then click '📩 Get OTP' below."
-            )
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📩 Get OTP", callback_data="get_otp")],
-                [InlineKeyboardButton("🔄 Retry (Send again)", callback_data="retry_otp")],
-                [InlineKeyboardButton("📱 Device -> Logout Bot", callback_data="logout_bot")]
-            ])
+        try:
+            # Country code mapping (Example: 0 for Russia, 22 for India in smshub). Itha unga API ku etha mathiri mathikonga.
+            api_country_code = "22" if country.lower() == "india" else "0" 
             
-        await call.message.edit_text(text, reply_markup=keyboard)
+            # API Call: Get Number
+            get_num_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getNumber&service=tg&country={api_country_code}"
+            response = requests.get(get_num_url).text
+            
+            if "ACCESS_NUMBER" in response:
+                # Format usually: ACCESS_NUMBER:12345678:919876543210
+                parts = response.split(":")
+                order_id = parts[1]
+                phone_num = parts[2]
+                
+                # Deduct balance only after successful API hit
+                db.update_balance(user_id, -price)
+                
+                # Save active order
+                active_orders[user_id] = {
+                    "order_id": order_id,
+                    "phone": phone_num,
+                    "country": country
+                }
+                
+                text = (
+                    f"✅ Purchase Successful!\n\n"
+                    f"📱 Number: `+{phone_num}`\n\n"
+                    f"👉 Enter this number in your Telegram App.\n"
+                    f"👉 Then click '📩 Get OTP' below."
+                )
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📩 Get OTP", callback_data="get_otp")],
+                    [InlineKeyboardButton("🚫 Cancel & Refund", callback_data="cancel_order")]
+                ])
+                await call.message.edit_text(text, reply_markup=keyboard)
+            else:
+                # API error (NO_NUMBERS, NO_BALANCE, etc.)
+                await call.message.edit_text(f"❌ API Error: {response}\n\nTry again later.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
+                
+        except Exception as e:
+            await call.message.edit_text(f"❌ Server Error: {e}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="buy_accounts")]]))
 
+    # ==========================================
+    # CORE API INTEGRATION: GET OTP
+    # ==========================================
     elif data == "get_otp":
         if user_id not in active_orders:
             return await call.answer("❌ No active order found.", show_alert=True)
             
-        await call.answer("⏳ Fetching OTP... Please wait.", show_alert=False)
-        session_str = active_orders[user_id]["session"]
+        await call.answer("⏳ Fetching OTP from API... Please wait.", show_alert=False)
+        order_id = active_orders[user_id]["order_id"]
         
         try:
-            user_client = Client(f"user_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=session_str, in_memory=True)
-            await user_client.connect()
+            # API Call: Get Status/OTP
+            get_otp_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getStatus&id={order_id}"
+            response = requests.get(get_otp_url).text
             
-            otp_msg = "No OTP received yet. Try again in 10s."
-            async for msg in user_client.get_chat_history(777000, limit=1):
-                otp_msg = msg.text
-            await user_client.disconnect()
-            
-            code_match = re.search(r'\b(\d{5})\b', otp_msg)
-            display_otp = code_match.group(1) if code_match else "Try again"
-            
-            await call.message.reply_text(f"🔢 Your OTP:\n`{display_otp}`\n\n_(If not received, wait 10s and click again)_")
+            if "STATUS_OK" in response:
+                otp_code = response.split(":")[1]
+                await call.message.reply_text(f"🔢 Your OTP:\n`{otp_code}`\n\n✅ Login Successful!")
+                # Remove from active orders once successful
+                del active_orders[user_id]
+            elif response == "STATUS_WAIT_CODE":
+                await call.answer("⏳ OTP not received yet. Waiting... Try again in 10s.", show_alert=True)
+            else:
+                await call.message.reply_text(f"⚠️ API Status: {response}")
+                
         except Exception as e:
-            await call.message.reply_text(f"❌ Error: {e}")
+            await call.message.reply_text(f"❌ Error fetching OTP: {e}")
 
-    elif data == "retry_otp":
+    # ==========================================
+    # CORE API INTEGRATION: CANCEL & REFUND
+    # ==========================================
+    elif data == "cancel_order":
         if user_id not in active_orders:
-            return await call.answer("❌ No active order.", show_alert=True)
-        await call.answer("⏳ Requesting code again...", show_alert=False)
+            return await call.answer("❌ No active order to cancel.", show_alert=True)
+            
+        order_id = active_orders[user_id]["order_id"]
+        country = active_orders[user_id]["country"]
+        price = db.get_price(country)
+        
         try:
-            user_client = Client(f"user_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=active_orders[user_id]["session"], in_memory=True)
-            await user_client.connect()
-            await user_client.send_code(active_orders[user_id]["phone"]) 
-            await user_client.disconnect()
-            await call.message.reply_text("✅ Requested a new OTP. Wait 10s and click Get OTP.")
+            # API Call: Cancel Order (Action code 8 for cancel in standard APIs)
+            cancel_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=setStatus&status=8&id={order_id}"
+            requests.get(cancel_url)
+            
+            # Refund user balance
+            db.update_balance(user_id, price)
+            del active_orders[user_id]
+            
+            await call.message.edit_text(f"🚫 Order Cancelled.\n💰 ₹{price} has been refunded to your wallet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
         except Exception as e:
-            await call.message.reply_text(f"❌ Error: {e}")
+            await call.message.reply_text(f"❌ Error cancelling order: {e}")
 
-    elif data == "logout_bot":
-        if user_id not in active_orders:
-            return await call.answer("❌ No active order.", show_alert=True)
-        await call.answer("⏳ Logging out bot...", show_alert=False)
-        try:
-            user_client = Client(f"user_{user_id}", api_id=API_ID, api_hash=API_HASH, session_string=active_orders[user_id]["session"], in_memory=True)
-            await user_client.connect()
-            await user_client.log_out() 
-            del active_orders[user_id] 
-            await call.message.edit_text("✅ Bot successfully logged out!\n\nAccount is yours.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="back_to_main")]]))
-        except Exception as e:
-            await call.message.reply_text(f"❌ Error: {e}")
-
+    # Admin Approvals
     elif data.startswith("approve_") or data.startswith("reject_"):
         if user_id != ADMIN_ID:
             return await call.answer("❌ You are not Admin!", show_alert=True)
@@ -292,72 +287,19 @@ async def button_handler(client, call: CallbackQuery):
         if target_user in pending_payments:
             del pending_payments[target_user]
 
-    elif data == "admin_add_acc" and user_id == ADMIN_ID:
-        admin_steps[user_id] = "WAIT_COUNTRY"
-        await call.message.edit_text("🌍 Enter Country Name (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
+    # Admin specific API check
+    elif data == "admin_api_balance" and user_id == ADMIN_ID:
+        try:
+            bal_url = f"{API_BASE_URL}?api_key={EXTERNAL_API_KEY}&action=getBalance"
+            resp = requests.get(bal_url).text
+            await call.answer(f"API Provider Balance: {resp}", show_alert=True)
+        except:
+            await call.answer("❌ Could not fetch API balance.", show_alert=True)
 
     elif data == "admin_edit_price" and user_id == ADMIN_ID:
         admin_steps[user_id] = "EDIT_PRICE_COUNTRY"
         await call.message.edit_text("💰 Which country's price to edit? (e.g., India):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main")]]))
 
-    elif data == "admin_view_stock" and user_id == ADMIN_ID:
-        countries = db.get_all_countries()
-        if not countries:
-            return await call.message.edit_text("📭 Stock is empty.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_to_main")]]))
-        
-        buttons = [[InlineKeyboardButton(f"🌍 {c} (Stock: {db.get_stock_count(c)})", callback_data=f"manage_stock_{c}")] for c in countries]
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_main")])
-        await call.message.edit_text("📊 Select Country to Manage:", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif data.startswith("manage_stock_") and user_id == ADMIN_ID:
-        country = data.split("_", 2)[2]
-        accounts = db.get_accounts_by_country(country)
-        if not accounts:
-            return await call.message.edit_text(f"❌ No stock in {country}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")]]))
-        
-        buttons = []
-        for acc in accounts:
-            phone_num = acc.get("phone")
-            if not phone_num:
-                details = acc.get("details", "")
-                phone_num = details.split("|")[0] if "|" in details else "Old Account"
-
-            buttons.append([
-                InlineKeyboardButton(f"📞 {phone_num}", callback_data="none"), 
-                InlineKeyboardButton("❌ Remove", callback_data=f"del_acc_{str(acc['_id'])}_{country}")
-            ])
-            
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")])
-        await call.message.edit_text(f"📱 Managing {country} Stock:", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif data.startswith("del_acc_") and user_id == ADMIN_ID:
-        parts = data.split("_", 3)
-        acc_id, country = parts[2], parts[3]
-        
-        try:
-            db.remove_account_by_id(acc_id)
-            await call.answer("✅ Account removed!", show_alert=True)
-            accounts = db.get_accounts_by_country(country)
-            if not accounts:
-                await call.message.edit_text(f"✅ All removed from {country}.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")]]))
-            else:
-                buttons = []
-                for acc in accounts:
-                    phone_num = acc.get("phone")
-                    if not phone_num:
-                        details = acc.get("details", "")
-                        phone_num = details.split("|")[0] if "|" in details else "Old Account"
-                    
-                    buttons.append([
-                        InlineKeyboardButton(f"📞 {phone_num}", callback_data="none"), 
-                        InlineKeyboardButton("❌ Remove", callback_data=f"del_acc_{str(acc['_id'])}_{country}")
-                    ])
-                buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_view_stock")])
-                await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(buttons))
-        except Exception as e:
-            await call.answer(f"❌ Error: {e}", show_alert=True)
-
 if __name__ == "__main__":
-    print("🚀 Bot is starting...")
+    print("🚀 API Bot is starting...")
     app.run()
-
