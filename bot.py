@@ -215,9 +215,9 @@ async def button_handler(client, call: CallbackQuery):
         try:
             service_code = "tg" 
             if country.lower() == "india":
-                server_code = "91"  
+                server_code = "0"  
             elif country.lower() == "usa":
-                server_code = "187" 
+                server_code = "0" 
             else:
                 server_code = "0"
             
